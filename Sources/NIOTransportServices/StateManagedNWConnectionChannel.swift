@@ -136,6 +136,17 @@ extension StateManagedNWConnectionChannel {
         parameters.includePeerToPeer = self.enablePeerToPeer
 
         parameters.multipathServiceType = self.multipathServiceType
+        
+        if #available(iOS 14.0, *) {
+            let dotHost = "dns.google"
+            let host = NWEndpoint.hostPort(host: NWEndpoint.Host(dotHost), port: 853)
+            let addresses = ["8.8.8.8"].map { NWEndpoint.hostPort(host: NWEndpoint.Host($0), port: 853) }
+            let privacyContext = NWParameters.PrivacyContext(description: "EncryptedDNS")
+            privacyContext.requireEncryptedNameResolution(true,
+                                                          fallbackResolver:
+                    .tls(host, serverAddresses: addresses))
+            parameters.setPrivacyContext(privacyContext)
+        }
 
         let connection = NWConnection(to: target, using: parameters)
         connection.stateUpdateHandler = self.stateUpdateHandler(newState:)
