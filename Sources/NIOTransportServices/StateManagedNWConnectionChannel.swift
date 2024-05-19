@@ -142,7 +142,7 @@ extension StateManagedNWConnectionChannel {
             let host = NWEndpoint.hostPort(host: NWEndpoint.Host(dotHost), port: 853)
             let addresses = ["8.8.8.8"].map { NWEndpoint.hostPort(host: NWEndpoint.Host($0), port: 853) }
             let privacyContext = NWParameters.PrivacyContext(description: "EncryptedDNS")
-            privacyContext.requireEncryptedNameResolution(true,
+            privacyContext.requireEncryptedNameResolution(false,
                                                           fallbackResolver:
                     .tls(host, serverAddresses: addresses))
             parameters.setPrivacyContext(privacyContext)
