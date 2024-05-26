@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+import NIOPosix
+
 #if canImport(Network)
 import NIOCore
 import Dispatch
@@ -203,6 +205,16 @@ public final class NIOTSConnectionBootstrap {
             channel.triggerUserOutboundEvent(NIOTSNetworkEvents.ConnectToNWEndpoint(endpoint: endpoint),
                                              promise: promise)
         }
+    }
+    
+    /// Connect to a given host and port using the given resolver
+    public func connect(resolver: Resolver, host: String, port: Int)-> EventLoopFuture<Channel> {
+        let eventLoop = self.group.next()
+        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { event, family in
+            return self.connect(shouldRegister: true) { channel, promise in
+                promise.succeed()
+            }
+        }.resolveAndConnect()
     }
 
     /// Use a pre-existing `NWConnection` to connect a `Channel`.
