@@ -62,7 +62,7 @@ public final class NIOTSConnectionBootstrap {
     private var tcpOptions: NWProtocolTCP.Options = .init()
     private var tlsOptions: NWProtocolTLS.Options?
     private var protocolHandlers: Optional<() -> [ChannelHandler]> = nil
-    private var connectionBuilderCallback: Optional<(NWEndpoint) -> NWConnection> = nil
+    private var requiredInterface : NWInterface?
 
     /// Create a `NIOTSConnectionBootstrap` on the `EventLoopGroup` `group`.
     ///
@@ -181,7 +181,7 @@ public final class NIOTSConnectionBootstrap {
     ///     - address: The address to connect to.
     /// - returns: An `EventLoopFuture<Channel>` to deliver the `Channel` when connected.
     public func connect(to address: SocketAddress) -> EventLoopFuture<Channel> {
-        return self.connect(existingNWConnection: self.connectionBuilderCallback?(NWEndpoint(fromSocketAddress: address)), shouldRegister: true) { channel, promise in
+        return self.connect(shouldRegister: true) { channel, promise in
             channel.connect(to: address, promise: promise)
         }
     }
@@ -202,7 +202,7 @@ public final class NIOTSConnectionBootstrap {
 
     /// Specify the `endpoint` to connect to for the TCP `Channel` that will be established.
     public func connect(endpoint: NWEndpoint) -> EventLoopFuture<Channel> {
-        return self.connect(existingNWConnection: connectionBuilderCallback?(endpoint), shouldRegister: true) { channel, promise in
+        return self.connect(shouldRegister: true) { channel, promise in
             channel.triggerUserOutboundEvent(NIOTSNetworkEvents.ConnectToNWEndpoint(endpoint: endpoint),
                                              promise: promise)
         }
@@ -211,8 +211,8 @@ public final class NIOTSConnectionBootstrap {
     /// Connect to a given host and port using the given resolver
     public func connect(resolver: Resolver, host: String, port: Int)-> EventLoopFuture<Channel> {
         let eventLoop = self.group.next()
-        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { event, family, address in
-            return self.connect(existingNWConnection: self.connectionBuilderCallback?(NWEndpoint(fromSocketAddress: address)), shouldRegister: true) { channel, promise in
+        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { event, family in
+            return self.connect(shouldRegister: true) { channel, promise in
                 promise.succeed()
             }
         }.resolveAndConnect()
@@ -235,12 +235,14 @@ public final class NIOTSConnectionBootstrap {
             conn = NIOTSConnectionChannel(wrapping: newConnection,
                                           on: self.group.next() as! NIOTSEventLoop,
                                           tcpOptions: self.tcpOptions,
-                                          tlsOptions: self.tlsOptions)
+                                          tlsOptions: self.tlsOptions,
+                                          requiredInterface: self.requiredInterface)
         } else {
             conn = NIOTSConnectionChannel(eventLoop: self.group.next() as! NIOTSEventLoop,
                                                        qos: self.qos,
                                                        tcpOptions: self.tcpOptions,
-                                                       tlsOptions: self.tlsOptions)
+                                                       tlsOptions: self.tlsOptions,
+                                          requiredInterface: self.requiredInterface)
         }
         let initializer = self.channelInitializer
         let channelOptions = self.channelOptions
@@ -283,12 +285,6 @@ public final class NIOTSConnectionBootstrap {
     public func protocolHandlers(_ handlers: @escaping () -> [ChannelHandler]) -> Self {
         precondition(self.protocolHandlers == nil, "protocol handlers can only be set once")
         self.protocolHandlers = handlers
-        return self
-    }
-    
-    public func connectionBuilderCallback(_ handler: @escaping @Sendable (NWEndpoint) -> NWConnection) -> Self {
-        precondition(self.connectionBuilderCallback == nil, "connection builder callback can only be set once")
-        self.connectionBuilderCallback = handler
         return self
     }
 }
@@ -431,14 +427,16 @@ extension NIOTSConnectionBootstrap {
                 wrapping: newConnection,
                 on: self.group.next() as! NIOTSEventLoop,
                 tcpOptions: self.tcpOptions,
-                tlsOptions: self.tlsOptions
+                tlsOptions: self.tlsOptions,
+                requiredInterface: self.requiredInterface
             )
         } else {
             connectionChannel = NIOTSConnectionChannel(
                 eventLoop: self.group.next() as! NIOTSEventLoop,
                 qos: self.qos,
                 tcpOptions: self.tcpOptions,
-                tlsOptions: self.tlsOptions
+                tlsOptions: self.tlsOptions,
+                requiredInterface: self.requiredInterface
             )
         }
         let channelInitializer = { (channel: Channel) -> EventLoopFuture<ChannelInitializerResult> in

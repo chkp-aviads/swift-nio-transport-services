@@ -43,6 +43,8 @@ internal protocol StateManagedNWConnectionChannel: StateManagedChannel where Act
     associatedtype NWOptions: NWOptionsProtocol
 
     var parameters: NWParameters { get }
+    
+    var requiredInterface : NWInterface? { get }
 
     var nwOptions: NWOptions { get }
     
@@ -136,6 +138,8 @@ extension StateManagedNWConnectionChannel {
         parameters.includePeerToPeer = self.enablePeerToPeer
 
         parameters.multipathServiceType = self.multipathServiceType
+        
+        parameters.requiredInterface = self.requiredInterface
 
         let connection = NWConnection(to: target, using: parameters)
         connection.stateUpdateHandler = self.stateUpdateHandler(newState:)

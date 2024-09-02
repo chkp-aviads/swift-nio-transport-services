@@ -159,6 +159,8 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
     internal var parameters: NWParameters {
         NWParameters(tls: self.tlsOptions, tcp: self.tcpOptions)
     }
+    
+    internal var requiredInterface : NWInterface?
 
     /// The TCP options for this connection.
     private var tcpOptions: NWProtocolTCP.Options
@@ -231,13 +233,15 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
                   parent: Channel? = nil,
                   qos: DispatchQoS? = nil,
                   tcpOptions: NWProtocolTCP.Options,
-                  tlsOptions: NWProtocolTLS.Options?) {
+                  tlsOptions: NWProtocolTLS.Options?,
+                  requiredInterface: NWInterface?) {
         self.tsEventLoop = eventLoop
         self.closePromise = eventLoop.makePromise()
         self.parent = parent
         self.connectionQueue = eventLoop.channelQueue(label: "nio.nioTransportServices.connectionchannel", qos: qos)
         self.tcpOptions = tcpOptions
         self.tlsOptions = tlsOptions
+        self.requiredInterface = requiredInterface
 
         // Must come last, as it requires self to be completely initialized.
         self._pipeline = ChannelPipeline(channel: self)
@@ -249,12 +253,14 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
                               parent: Channel? = nil,
                               qos: DispatchQoS? = nil,
                               tcpOptions: NWProtocolTCP.Options,
-                              tlsOptions: NWProtocolTLS.Options?) {
+                              tlsOptions: NWProtocolTLS.Options?,
+                              requiredInterface: NWInterface? = nil) {
         self.init(eventLoop: eventLoop,
                   parent: parent,
                   qos: qos,
                   tcpOptions: tcpOptions,
-                  tlsOptions: tlsOptions)
+                  tlsOptions: tlsOptions,
+                  requiredInterface: requiredInterface)
         self.connection = connection
     }
 }

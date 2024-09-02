@@ -21,7 +21,7 @@ import Network
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 extension IPv4Address {
     /// Create an `IPv4Address` object from a `sockaddr_in`.
-    internal init(fromSockAddr sockAddr: sockaddr_in) {
+    public init(fromSockAddr sockAddr: sockaddr_in) {
         var localAddr = sockAddr
         self = withUnsafeBytes(of: &localAddr.sin_addr) {
             precondition($0.count == 4)
@@ -33,7 +33,7 @@ extension IPv4Address {
 
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 extension IPv6Address {
-    internal init(fromSockAddr sockAddr: sockaddr_in6) {
+    public init(fromSockAddr sockAddr: sockaddr_in6) {
         var localAddr = sockAddr
 
         // TODO: We should check whether we can reliably pull an interface declaration out
@@ -49,7 +49,7 @@ extension IPv6Address {
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 extension NWEndpoint {
     /// Create an `NWEndpoint` value from a NIO `SocketAddress`.
-    internal init(fromSocketAddress socketAddress: SocketAddress) {
+    public init(fromSocketAddress socketAddress: SocketAddress) {
         switch socketAddress {
         case .unixDomainSocket(let uds):
             var address = uds.address
@@ -74,7 +74,7 @@ extension NWEndpoint {
 // the various address-handling functions.
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 extension SocketAddress {
-    internal init(fromNWEndpoint endpoint: NWEndpoint) throws {
+    public init(fromNWEndpoint endpoint: NWEndpoint) throws {
         switch endpoint {
         case .hostPort(.ipv4(let host), let port):
             var addr = sockaddr_in()
