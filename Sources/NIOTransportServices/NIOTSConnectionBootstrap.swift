@@ -287,6 +287,12 @@ public final class NIOTSConnectionBootstrap {
         self.protocolHandlers = handlers
         return self
     }
+    
+    public func requiredInterface(_ requiredInterface: NWInterface?) -> Self {
+        precondition(self.requiredInterface == nil, "required interface can only be set once")
+        self.requiredInterface = requiredInterface
+        return self
+    }
 }
 
 // MARK: Async connect methods with arbitrary payload
