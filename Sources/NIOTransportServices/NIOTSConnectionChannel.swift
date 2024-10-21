@@ -150,6 +150,12 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
     /// after the initial connection attempt has been made.
     internal var connection: NWConnection?
 
+    /// The minimum length of data to receive from this connection, until the content is complete.
+    internal var minimumIncompleteReceiveLength: Int
+
+    /// The maximum length of data to receive from this connection in a single completion.
+    internal var maximumReceiveLength: Int
+
     /// The `DispatchQueue` that socket events for this connection will be dispatched onto.
     internal let connectionQueue: DispatchQueue
 
@@ -232,12 +238,16 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
     internal init(eventLoop: NIOTSEventLoop,
                   parent: Channel? = nil,
                   qos: DispatchQoS? = nil,
+                  minimumIncompleteReceiveLength: Int = 1,
+                  maximumReceiveLength: Int = 8192,
                   tcpOptions: NWProtocolTCP.Options,
                   tlsOptions: NWProtocolTLS.Options?,
                   requiredInterface: NWInterface?) {
         self.tsEventLoop = eventLoop
         self.closePromise = eventLoop.makePromise()
         self.parent = parent
+        self.minimumIncompleteReceiveLength = minimumIncompleteReceiveLength
+        self.maximumReceiveLength = maximumReceiveLength
         self.connectionQueue = eventLoop.channelQueue(label: "nio.nioTransportServices.connectionchannel", qos: qos)
         self.tcpOptions = tcpOptions
         self.tlsOptions = tlsOptions
@@ -252,12 +262,16 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
                               on eventLoop: NIOTSEventLoop,
                               parent: Channel? = nil,
                               qos: DispatchQoS? = nil,
+                              minimumIncompleteReceiveLength: Int = 1,
+                              maximumReceiveLength: Int = 8192,
                               tcpOptions: NWProtocolTCP.Options,
                               tlsOptions: NWProtocolTLS.Options?,
                               requiredInterface: NWInterface? = nil) {
         self.init(eventLoop: eventLoop,
                   parent: parent,
                   qos: qos,
+                  minimumIncompleteReceiveLength: minimumIncompleteReceiveLength,
+                  maximumReceiveLength: maximumReceiveLength,
                   tcpOptions: tcpOptions,
                   tlsOptions: tlsOptions,
                   requiredInterface: requiredInterface)
@@ -414,6 +428,13 @@ extension NIOTSConnectionChannel {
         } else {
             self.pipeline.fireUserInboundEventTriggered(NIOTSNetworkEvents.BetterPathUnavailable())
         }
+    }
+    
+    /// Called by the underlying `NWConnection` when a path becomes viable or non-viable
+    ///
+    /// Notifies the channel pipeline of the new viability.
+    private func viabilityUpdateHandler(_ isViable: Bool) {
+        self.pipeline.fireUserInboundEventTriggered(NIOTSNetworkEvents.ViabilityUpdate(isViable: isViable))
     }
 
     /// Called by the underlying `NWConnection` when this connection changes its network path.
