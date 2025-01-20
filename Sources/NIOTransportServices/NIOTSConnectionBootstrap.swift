@@ -214,6 +214,18 @@ public final class NIOTSConnectionBootstrap {
         }
     }
     
+    @available(iOS 13, *)
+    // This is similar to connect(host:port) but we resolve to SocketAddress ourselves
+    // We do so because connect(endpoint:) stalls on non-existent host untill conenctTimeout
+    // By resolving ourselves we fail fast on bad hostname
+    public func connectResolving(host: String, port: Int) -> EventLoopFuture<Channel> {
+        return self.group.next().makeFutureWithTask {
+            return try SocketAddress.makeAddressResolvingHost(host, port: port)
+        }.flatMap { address in
+            return self.connect(to: address)
+        }
+    }
+    
     /// Connect to a given host and port using the given resolver
     public func connect(resolver: Resolver, host: String, port: Int)-> EventLoopFuture<Channel> {
         let eventLoop = self.group.next()
