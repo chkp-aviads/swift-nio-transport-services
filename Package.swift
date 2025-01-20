@@ -18,7 +18,7 @@ import PackageDescription
 let package = Package(
     name: "swift-nio-transport-services",
     products: [
-        .library(name: "NIOTransportServices", targets: ["NIOTransportServices"]),
+        .library(name: "NIOTransportServices", targets: ["NIOTransportServices"])
     ],
     dependencies: [
         .package(url: "https://github.com/chkp-aviads/swift-nio.git", branch: "main"),
@@ -33,21 +33,24 @@ let package = Package(
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(name: "NIOTLS", package: "swift-nio"),
                 .product(name: "Atomics", package: "swift-atomics"),
-            ]),
+            ]
+        ),
         .executableTarget(
             name: "NIOTSHTTPClient",
             dependencies: [
                 "NIOTransportServices",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
-            ]),
+            ]
+        ),
         .executableTarget(
             name: "NIOTSHTTPServer",
             dependencies: [
                 "NIOTransportServices",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
-            ]),
+            ]
+        ),
         .testTarget(
             name: "NIOTransportServicesTests",
             dependencies: [
@@ -55,6 +58,18 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOEmbedded", package: "swift-nio"),
                 .product(name: "Atomics", package: "swift-atomics"),
-            ]),
+            ]
+        ),
     ]
 )
+
+// ---    STANDARD CROSS-REPO SETTINGS DO NOT EDIT   --- //
+for target in package.targets {
+    if target.type != .plugin {
+        var settings = target.swiftSettings ?? []
+        // https://github.com/swiftlang/swift-evolution/blob/main/proposals/0444-member-import-visibility.md
+        settings.append(.enableUpcomingFeature("MemberImportVisibility"))
+        target.swiftSettings = settings
+    }
+}
+// --- END: STANDARD CROSS-REPO SETTINGS DO NOT EDIT --- //
