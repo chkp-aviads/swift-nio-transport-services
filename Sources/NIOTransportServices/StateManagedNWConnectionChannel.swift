@@ -445,7 +445,11 @@ extension StateManagedNWConnectionChannel {
             self.pipeline.fireErrorCaught(error)
             self.close0(error: error, mode: .all, promise: nil)
         } else if isComplete {
-            self.didReadEOF()
+            if let stack = parameters.defaultProtocolStack.transportProtocol, stack is NWProtocolUDP.Options {
+                // don't close the channel for UDP
+            } else {
+                self.didReadEOF()
+            }
         }
 
         // Last, issue a new read automatically if we need to.

@@ -218,7 +218,7 @@ public final class NIOTSConnectionBootstrap {
         }
     }
     
-    @available(iOS 13, *)
+    @available(iOS 13, macOS 10.15, *)
     // This is similar to connect(host:port) but we resolve to SocketAddress ourselves
     // We do so because connect(endpoint:) stalls on non-existent host untill conenctTimeout
     // By resolving ourselves we fail fast on bad hostname

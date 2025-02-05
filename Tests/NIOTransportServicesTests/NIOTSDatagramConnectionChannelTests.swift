@@ -61,6 +61,7 @@ final class ReadRecorder<DataType>: ChannelInboundHandler {
         case fresh
         case registered
         case active
+        case inactive
     }
 
     var reads: [DataType] = []
@@ -108,6 +109,10 @@ final class ReadRecorder<DataType>: ChannelInboundHandler {
 
         readWaiters[count] = loop!.makePromise()
         return readWaiters[count]!.futureResult
+    }
+    
+    func channelInactive(context: ChannelHandlerContext) {
+        self.state = .inactive
     }
 }
 
@@ -159,13 +164,18 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
         var buffer = client.allocator.buffer(capacity: 256)
         buffer.writeStaticString("hello, world!")
         XCTAssertNoThrow(try client.writeAndFlush(buffer).wait())
+        
+        var secondBuffer = client.allocator.buffer(capacity: 256)
+        secondBuffer.writeStaticString("goodbye, world!")
+        XCTAssertNoThrow(try client.writeAndFlush(secondBuffer).wait())
 
         let serverHandle = try serverHandlePromise.futureResult.wait()
 
-        let reads = try serverHandle.waitForDatagrams(count: 1)
+        let reads = try serverHandle.waitForDatagrams(count: 2)
 
-        XCTAssertEqual(reads.count, 1)
+        XCTAssertEqual(reads.count, 2)
         XCTAssertEqual(reads[0], buffer)
+        XCTAssertEqual(reads[1], secondBuffer)
     }
 
     func testSyncOptionsAreSupported() throws {
