@@ -14,6 +14,7 @@
 
 #if canImport(Network)
 import NIOCore
+import NIOPosix
 import Dispatch
 import Network
 
@@ -153,6 +154,28 @@ public final class NIOTSDatagramBootstrap {
     public func connect(to address: SocketAddress) -> EventLoopFuture<Channel> {
         self.connect0 { channel, promise in
             channel.connect(to: address, promise: promise)
+        }
+    }
+    
+    /// Connect to a given host and port using the given resolver
+    public func connect(resolver: Resolver, host: String, port: Int)-> EventLoopFuture<Channel> {
+        let eventLoop = self.group.next()
+        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { event, family in
+            return self.connect0 { channel, promise in
+                promise.succeed()
+            }
+        }.resolveAndConnect()
+    }
+    
+    @available(iOS 13, macOS 10.15, *)
+    // This is similar to connect(host:port) but we resolve to SocketAddress ourselves
+    // We do so because connect(endpoint:) stalls on non-existent host untill conenctTimeout
+    // By resolving ourselves we fail fast on bad hostname
+    public func connectResolving(host: String, port: Int) -> EventLoopFuture<Channel> {
+        return self.group.next().makeFutureWithTask {
+            return try SocketAddress.makeAddressResolvingHost(host, port: port)
+        }.flatMap { address in
+            return self.connect(to: address)
         }
     }
 

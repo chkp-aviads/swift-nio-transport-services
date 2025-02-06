@@ -16,8 +16,27 @@
 import XCTest
 import Network
 import NIOCore
+import NIOPosix
 import NIOTransportServices
 import Foundation
+
+struct NonBlockingResolver : Resolver, Sendable {
+    let eventLoopGroup : EventLoopGroup
+    
+    func initiateAQuery(host: String, port: Int) -> NIOCore.EventLoopFuture<[NIOCore.SocketAddress]> {
+        return eventLoopGroup.any().makeFutureWithTask {   // We run it async as the call is blocking
+            return [try SocketAddress.makeAddressResolvingHost(host, port: port)]
+        }
+    }
+    
+    func initiateAAAAQuery(host: String, port: Int) -> NIOCore.EventLoopFuture<[NIOCore.SocketAddress]> {
+        return eventLoopGroup.any().makeSucceededFuture([])    // We don't really care. Just return address from the A query (even if it's actually IPv6 address)
+    }
+    
+    func cancelQueries() {
+        // Can't cancel blocking call
+    }
+}
 
 extension Channel {
     func wait<T>(for type: T.Type, count: Int) throws -> [T] {
@@ -142,7 +161,7 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
             .channelInitializer { channel in
                 channel.pipeline.addHandler(ReadRecorder<ByteBuffer>(), name: "ByteReadRecorder")
             }
-            .connect(host: host, port: port)
+            .connect(resolver: NonBlockingResolver(eventLoopGroup: group), host: host, port: port)
             .wait()
     }
 
