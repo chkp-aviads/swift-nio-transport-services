@@ -42,12 +42,13 @@ import Network
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 public final class NIOTSDatagramBootstrap {
     private let group: EventLoopGroup
-    private var channelInitializer: ((Channel) -> EventLoopFuture<Void>)?
+    private var channelInitializer: (@Sendable (Channel) -> EventLoopFuture<Void>)?
     private var connectTimeout: TimeAmount = TimeAmount.seconds(10)
     private var channelOptions = ChannelOptions.Storage()
     private var qos: DispatchQoS?
     private var udpOptions: NWProtocolUDP.Options = .init()
     private var tlsOptions: NWProtocolTLS.Options?
+    private var nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
 
     /// Create a `NIOTSDatagramConnectionBootstrap` on the `EventLoopGroup` `group`.
     ///
@@ -80,7 +81,8 @@ public final class NIOTSDatagramBootstrap {
     ///
     /// - parameters:
     ///     - handler: A closure that initializes the provided `Channel`.
-    public func channelInitializer(_ handler: @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
+    @preconcurrency
+    public func channelInitializer(_ handler: @Sendable @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
         self.channelInitializer = handler
         return self
     }
@@ -133,6 +135,14 @@ public final class NIOTSDatagramBootstrap {
         return self
     }
 
+    /// Customise the `NWParameters` to be used when creating the connection.
+    public func configureNWParameters(
+        _ configurator: @Sendable @escaping (NWParameters) -> Void
+    ) -> Self {
+        self.nwParametersConfigurator = configurator
+        return self
+    }
+
     /// Specify the `host` and `port` to connect to for the UDP `Channel` that will be established.
     ///
     /// - parameters:
@@ -158,10 +168,10 @@ public final class NIOTSDatagramBootstrap {
     }
     
     /// Connect to a given host and port using the given resolver
-    public func connect(resolver: Resolver, host: String, port: Int)-> EventLoopFuture<Channel> {
-        let eventLoop = self.group.next()
-        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { event, family in
-            return self.connect0 { channel, promise in
+    public func connect(resolver: Resolver & Sendable, host: String, port: Int)-> EventLoopFuture<Channel> {
+        let eventLoop = self.group.next() as! NIOTSEventLoop
+        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { [qos, udpOptions, tlsOptions, nwParametersConfigurator, channelInitializer, channelOptions, connectTimeout] event, family in
+            return NIOTSDatagramBootstrap.initializeAndRegisterNewChannel(eventLoop: eventLoop, qos: qos, udpOptions: udpOptions, tlsOptions: tlsOptions, nwParametersConfigurator: nwParametersConfigurator, channelInitializer: channelInitializer, channelOptions: channelOptions, connectTimeout: connectTimeout) { channel, promise in
                 promise.succeed()
             }
         }.resolveAndConnect()
@@ -174,9 +184,9 @@ public final class NIOTSDatagramBootstrap {
     public func connectResolving(host: String, port: Int) -> EventLoopFuture<Channel> {
         return self.group.next().makeFutureWithTask {
             return try SocketAddress.makeAddressResolvingHost(host, port: port)
-        }.flatMap { address in
+        }.assumeIsolated().flatMap { address in
             return self.connect(to: address)
-        }
+        }.nonisolated()
     }
 
     /// Specify the `unixDomainSocket` path to connect to for the UDS `Channel` that will be established.
@@ -202,18 +212,29 @@ public final class NIOTSDatagramBootstrap {
             )
         }
     }
-
-    private func connect0(_ binder: @escaping (Channel, EventLoopPromise<Void>) -> Void) -> EventLoopFuture<Channel> {
+    
+    // Workaround to make connect0 sendable
+    private static func initializeAndRegisterNewChannel(
+        eventLoop: NIOTSEventLoop,
+        qos: DispatchQoS?,
+        udpOptions: NWProtocolUDP.Options,
+        tlsOptions: NWProtocolTLS.Options?,
+        nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?,
+        channelInitializer: (@Sendable (Channel) -> EventLoopFuture<Void>)?,
+        channelOptions : ChannelOptions.Storage,
+        connectTimeout: TimeAmount,
+        _ binder: @Sendable @escaping (Channel, EventLoopPromise<Void>) -> Void
+    ) -> EventLoopFuture<Channel> {
         let conn: Channel = NIOTSDatagramChannel(
-            eventLoop: self.group.next() as! NIOTSEventLoop,
-            qos: self.qos,
-            udpOptions: self.udpOptions,
-            tlsOptions: self.tlsOptions
+            eventLoop: eventLoop,
+            qos: qos,
+            udpOptions: udpOptions,
+            tlsOptions: tlsOptions,
+            nwParametersConfigurator: nwParametersConfigurator
         )
-        let initializer = self.channelInitializer ?? { _ in conn.eventLoop.makeSucceededFuture(()) }
-        let channelOptions = self.channelOptions
-
-        return conn.eventLoop.submit {
+        let initializer = channelInitializer ?? { @Sendable _ in conn.eventLoop.makeSucceededFuture(()) }
+        
+        return conn.eventLoop.submit { [channelOptions, connectTimeout] in
             channelOptions.applyAllChannelOptions(to: conn).flatMap {
                 initializer(conn)
             }.flatMap {
@@ -222,11 +243,11 @@ public final class NIOTSDatagramBootstrap {
             }.flatMap {
                 let connectPromise: EventLoopPromise<Void> = conn.eventLoop.makePromise()
                 binder(conn, connectPromise)
-                let cancelTask = conn.eventLoop.scheduleTask(in: self.connectTimeout) {
-                    connectPromise.fail(ChannelError.connectTimeout(self.connectTimeout))
+                let cancelTask = conn.eventLoop.scheduleTask(in: connectTimeout) {
+                    connectPromise.fail(ChannelError.connectTimeout(connectTimeout))
                     conn.close(promise: nil)
                 }
-
+                
                 connectPromise.futureResult.whenComplete { (_: Result<Void, Error>) in
                     cancelTask.cancel()
                 }
@@ -237,5 +258,15 @@ public final class NIOTSDatagramBootstrap {
             }
         }.flatMap { $0 }
     }
+
+    private func connect0(
+        _ binder: @Sendable @escaping (Channel, EventLoopPromise<Void>) -> Void
+    ) -> EventLoopFuture<Channel> {
+        return NIOTSDatagramBootstrap.initializeAndRegisterNewChannel(eventLoop: self.group.next() as! NIOTSEventLoop, qos: self.qos, udpOptions: self.udpOptions, tlsOptions: self.tlsOptions, nwParametersConfigurator: self.nwParametersConfigurator, channelInitializer: self.channelInitializer, channelOptions: self.channelOptions, connectTimeout: self.connectTimeout, binder)
+    }
 }
+
+@available(*, unavailable)
+@available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
+extension NIOTSDatagramBootstrap: Sendable {}
 #endif

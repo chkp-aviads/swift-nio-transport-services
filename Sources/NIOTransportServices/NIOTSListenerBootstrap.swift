@@ -57,15 +57,19 @@ import Network
 public final class NIOTSListenerBootstrap {
     private let group: EventLoopGroup
     private let childGroup: EventLoopGroup
-    private var serverChannelInit: ((Channel) -> EventLoopFuture<Void>)?
-    private var childChannelInit: ((Channel) -> EventLoopFuture<Void>)?
+    private var serverChannelInit: (@Sendable (Channel) -> EventLoopFuture<Void>)?
+    private var childChannelInit: (@Sendable (Channel) -> EventLoopFuture<Void>)?
     private var serverChannelOptions = ChannelOptions.Storage()
     private var childChannelOptions = ChannelOptions.Storage()
     private var serverQoS: DispatchQoS?
     private var childQoS: DispatchQoS?
     private var tcpOptions: NWProtocolTCP.Options = .init()
+    private var childTCPOptions: NWProtocolTCP.Options = .init()
     private var tlsOptions: NWProtocolTLS.Options?
+    private var childTLSOptions: NWProtocolTLS.Options?
     private var bindTimeout: TimeAmount?
+    private var nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
+    private var childNWParametersConfigurator: (@Sendable (NWParameters) -> Void)?
 
     /// Create a ``NIOTSListenerBootstrap`` for the `EventLoopGroup` `group`.
     ///
@@ -157,7 +161,9 @@ public final class NIOTSListenerBootstrap {
     ///
     /// - parameters:
     ///     - initializer: A closure that initializes the provided `Channel`.
-    public func serverChannelInitializer(_ initializer: @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
+    @preconcurrency
+    public func serverChannelInitializer(_ initializer: @escaping @Sendable (Channel) -> EventLoopFuture<Void>) -> Self
+    {
         self.serverChannelInit = initializer
         return self
     }
@@ -170,7 +176,8 @@ public final class NIOTSListenerBootstrap {
     ///
     /// - parameters:
     ///     - initializer: A closure that initializes the provided `Channel`.
-    public func childChannelInitializer(_ initializer: @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
+    @preconcurrency
+    public func childChannelInitializer(_ initializer: @escaping @Sendable (Channel) -> EventLoopFuture<Void>) -> Self {
         self.childChannelInit = initializer
         return self
     }
@@ -224,15 +231,43 @@ public final class NIOTSListenerBootstrap {
         return self
     }
 
-    /// Specifies the TCP options to use on the child `Channel`s.
+    /// Specifies the TCP options to use on the listener.
     public func tcpOptions(_ options: NWProtocolTCP.Options) -> Self {
         self.tcpOptions = options
         return self
     }
 
-    /// Specifies the TLS options to use on the child `Channel`s.
+    /// Specifies the TCP options to use on the child `Channel`s.
+    public func childTCPOptions(_ options: NWProtocolTCP.Options) -> Self {
+        self.childTCPOptions = options
+        return self
+    }
+
+    /// Specifies the TLS options to use on the listener.
     public func tlsOptions(_ options: NWProtocolTLS.Options) -> Self {
         self.tlsOptions = options
+        return self
+    }
+
+    /// Specifies the TLS options to use on the child `Channel`s.
+    public func childTLSOptions(_ options: NWProtocolTLS.Options) -> Self {
+        self.childTLSOptions = options
+        return self
+    }
+
+    /// Customise the `NWParameters` to be used when creating the `NWConnection` for the listener.
+    public func configureNWParameters(
+        _ configurator: @Sendable @escaping (NWParameters) -> Void
+    ) -> Self {
+        self.nwParametersConfigurator = configurator
+        return self
+    }
+
+    /// Customise the `NWParameters` to be used when creating the `NWConnection`s for the child `Channel`s.
+    public func configureChildNWParameters(
+        _ configurator: @Sendable @escaping (NWParameters) -> Void
+    ) -> Self {
+        self.childNWParametersConfigurator = configurator
         return self
     }
 
@@ -318,10 +353,10 @@ public final class NIOTSListenerBootstrap {
     private func bind0(
         existingNWListener: NWListener? = nil,
         shouldRegister: Bool,
-        _ binder: @escaping (NIOTSListenerChannel, EventLoopPromise<Void>) -> Void
+        _ binder: @escaping @Sendable (NIOTSListenerChannel, EventLoopPromise<Void>) -> Void
     ) -> EventLoopFuture<Channel> {
         let eventLoop = self.group.next() as! NIOTSEventLoop
-        let serverChannelInit = self.serverChannelInit ?? { _ in eventLoop.makeSucceededFuture(()) }
+        let serverChannelInit = self.serverChannelInit ?? { @Sendable _ in eventLoop.makeSucceededFuture(()) }
         let childChannelInit = self.childChannelInit
         let serverChannelOptions = self.serverChannelOptions
         let childChannelOptions = self.childChannelOptions
@@ -334,10 +369,12 @@ public final class NIOTSListenerBootstrap {
                 qos: self.serverQoS,
                 tcpOptions: self.tcpOptions,
                 tlsOptions: self.tlsOptions,
+                nwParametersConfigurator: self.nwParametersConfigurator,
                 childLoopGroup: self.childGroup,
                 childChannelQoS: self.childQoS,
-                childTCPOptions: self.tcpOptions,
-                childTLSOptions: self.tlsOptions
+                childTCPOptions: self.childTCPOptions,
+                childTLSOptions: self.childTLSOptions,
+                childNWParametersConfigurator: self.childNWParametersConfigurator
             )
         } else {
             serverChannel = NIOTSListenerChannel(
@@ -345,24 +382,28 @@ public final class NIOTSListenerBootstrap {
                 qos: self.serverQoS,
                 tcpOptions: self.tcpOptions,
                 tlsOptions: self.tlsOptions,
+                nwParametersConfigurator: self.nwParametersConfigurator,
                 childLoopGroup: self.childGroup,
                 childChannelQoS: self.childQoS,
-                childTCPOptions: self.tcpOptions,
-                childTLSOptions: self.tlsOptions
+                childTCPOptions: self.childTCPOptions,
+                childTLSOptions: self.childTLSOptions,
+                childNWParametersConfigurator: self.childNWParametersConfigurator
             )
         }
 
-        return eventLoop.submit {
+        return eventLoop.submit { [bindTimeout] in
             serverChannelOptions.applyAllChannelOptions(to: serverChannel).flatMap {
                 serverChannelInit(serverChannel)
             }.flatMap {
                 eventLoop.assertInEventLoop()
-                return serverChannel.pipeline.addHandler(
-                    AcceptHandler<NIOTSConnectionChannel>(
-                        childChannelInitializer: childChannelInit,
-                        childChannelOptions: childChannelOptions
+                return eventLoop.makeCompletedFuture {
+                    try serverChannel.pipeline.syncOperations.addHandler(
+                        AcceptHandler<NIOTSConnectionChannel>(
+                            childChannelInitializer: childChannelInit,
+                            childChannelOptions: childChannelOptions
+                        )
                     )
-                )
+                }
             }.flatMap {
                 if shouldRegister {
                     return serverChannel.register()
@@ -373,7 +414,7 @@ public final class NIOTSListenerBootstrap {
                 let bindPromise = eventLoop.makePromise(of: Void.self)
                 binder(serverChannel, bindPromise)
 
-                if let bindTimeout = self.bindTimeout {
+                if let bindTimeout = bindTimeout {
                     let cancelTask = eventLoop.scheduleTask(in: bindTimeout) {
                         bindPromise.fail(NIOTSErrors.BindTimeout(timeout: bindTimeout))
                         serverChannel.close(promise: nil)
@@ -537,7 +578,7 @@ extension NIOTSListenerBootstrap {
         existingNWListener: NWListener? = nil,
         serverBackPressureStrategy: NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark?,
         childChannelInitializer: @escaping @Sendable (Channel) -> EventLoopFuture<ChannelInitializerResult>,
-        registration: @escaping (NIOTSListenerChannel, EventLoopPromise<Void>) -> Void
+        registration: @escaping @Sendable (NIOTSListenerChannel, EventLoopPromise<Void>) -> Void
     ) -> EventLoopFuture<NIOAsyncChannel<ChannelInitializerResult, Never>> {
         let eventLoop = self.group.next() as! NIOTSEventLoop
         let serverChannelInit = self.serverChannelInit ?? { _ in eventLoop.makeSucceededFuture(()) }
@@ -553,10 +594,12 @@ extension NIOTSListenerBootstrap {
                 qos: self.serverQoS,
                 tcpOptions: self.tcpOptions,
                 tlsOptions: self.tlsOptions,
+                nwParametersConfigurator: self.nwParametersConfigurator,
                 childLoopGroup: self.childGroup,
                 childChannelQoS: self.childQoS,
                 childTCPOptions: self.tcpOptions,
-                childTLSOptions: self.tlsOptions
+                childTLSOptions: self.tlsOptions,
+                childNWParametersConfigurator: self.nwParametersConfigurator
             )
         } else {
             serverChannel = NIOTSListenerChannel(
@@ -564,14 +607,16 @@ extension NIOTSListenerBootstrap {
                 qos: self.serverQoS,
                 tcpOptions: self.tcpOptions,
                 tlsOptions: self.tlsOptions,
+                nwParametersConfigurator: self.nwParametersConfigurator,
                 childLoopGroup: self.childGroup,
                 childChannelQoS: self.childQoS,
                 childTCPOptions: self.tcpOptions,
-                childTLSOptions: self.tlsOptions
+                childTLSOptions: self.tlsOptions,
+                childNWParametersConfigurator: self.nwParametersConfigurator
             )
         }
 
-        return eventLoop.submit {
+        return eventLoop.submit { [bindTimeout] in
             serverChannelOptions.applyAllChannelOptions(to: serverChannel).flatMap {
                 serverChannelInit(serverChannel)
             }.flatMap { (_) -> EventLoopFuture<NIOAsyncChannel<ChannelInitializerResult, Never>> in
@@ -585,7 +630,7 @@ extension NIOTSListenerBootstrap {
                     )
                     let asyncChannel = try NIOAsyncChannel<ChannelInitializerResult, Never>
                         ._wrapAsyncChannelWithTransformations(
-                            synchronouslyWrapping: serverChannel,
+                            wrappingChannelSynchronously: serverChannel,
                             backPressureStrategy: serverBackPressureStrategy,
                             channelReadTransformation: { channel -> EventLoopFuture<(ChannelInitializerResult)> in
                                 // The channelReadTransformation is run on the EL of the server channel
@@ -600,7 +645,7 @@ extension NIOTSListenerBootstrap {
                     let bindPromise = eventLoop.makePromise(of: Void.self)
                     registration(serverChannel, bindPromise)
 
-                    if let bindTimeout = self.bindTimeout {
+                    if let bindTimeout = bindTimeout {
                         let cancelTask = eventLoop.scheduleTask(in: bindTimeout) {
                             bindPromise.fail(NIOTSErrors.BindTimeout(timeout: bindTimeout))
                             serverChannel.close(promise: nil)
@@ -627,4 +672,6 @@ extension NIOTSListenerBootstrap {
     }
 }
 
+@available(*, unavailable)
+extension NIOTSListenerBootstrap: Sendable {}
 #endif

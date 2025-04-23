@@ -141,8 +141,12 @@ internal final class NIOTSDatagramChannel: StateManagedNWConnectionChannel {
     internal var multipathServiceType: NWParameters.MultipathServiceType = .disabled
     internal var requiredInterface : NWInterface?
 
+    internal let nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
+
     var parameters: NWParameters {
-        NWParameters(dtls: self.tlsOptions, udp: self.udpOptions)
+        let parameters = NWParameters(dtls: self.tlsOptions, udp: self.udpOptions)
+        self.nwParametersConfigurator?(parameters)
+        return parameters
     }
 
     var _inboundStreamOpen: Bool {
@@ -183,7 +187,8 @@ internal final class NIOTSDatagramChannel: StateManagedNWConnectionChannel {
         minimumIncompleteReceiveLength: Int = 1,
         maximumReceiveLength: Int = 8192,
         udpOptions: NWProtocolUDP.Options,
-        tlsOptions: NWProtocolTLS.Options?
+        tlsOptions: NWProtocolTLS.Options?,
+        nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
     ) {
         self.tsEventLoop = eventLoop
         self.closePromise = eventLoop.makePromise()
@@ -193,6 +198,7 @@ internal final class NIOTSDatagramChannel: StateManagedNWConnectionChannel {
         self.connectionQueue = eventLoop.channelQueue(label: "nio.nioTransportServices.connectionchannel", qos: qos)
         self.udpOptions = udpOptions
         self.tlsOptions = tlsOptions
+        self.nwParametersConfigurator = nwParametersConfigurator
 
         // Must come last, as it requires self to be completely initialized.
         self._pipeline = ChannelPipeline(channel: self)
@@ -207,7 +213,8 @@ internal final class NIOTSDatagramChannel: StateManagedNWConnectionChannel {
         minimumIncompleteReceiveLength: Int = 1,
         maximumReceiveLength: Int = 8192,
         udpOptions: NWProtocolUDP.Options,
-        tlsOptions: NWProtocolTLS.Options?
+        tlsOptions: NWProtocolTLS.Options?,
+        nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
     ) {
         self.init(
             eventLoop: eventLoop,
@@ -216,7 +223,8 @@ internal final class NIOTSDatagramChannel: StateManagedNWConnectionChannel {
             minimumIncompleteReceiveLength: minimumIncompleteReceiveLength,
             maximumReceiveLength: maximumReceiveLength,
             udpOptions: udpOptions,
-            tlsOptions: tlsOptions
+            tlsOptions: tlsOptions,
+            nwParametersConfigurator: nwParametersConfigurator
         )
         self.connection = connection
     }
@@ -244,4 +252,7 @@ extension NIOTSDatagramChannel {
         SynchronousOptions(channel: self)
     }
 }
+
+@available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
+extension NIOTSDatagramChannel: @unchecked Sendable {}
 #endif

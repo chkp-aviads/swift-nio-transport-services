@@ -19,6 +19,7 @@ import NIOCore
 import NIOPosix
 import NIOTransportServices
 import Foundation
+import NIOConcurrencyHelpers
 
 struct NonBlockingResolver : Resolver, Sendable {
     let eventLoopGroup : EventLoopGroup
@@ -39,7 +40,7 @@ struct NonBlockingResolver : Resolver, Sendable {
 }
 
 extension Channel {
-    func wait<T>(for type: T.Type, count: Int) throws -> [T] {
+    func wait<T: Sendable>(for type: T.Type, count: Int) throws -> [T] {
         try self.pipeline.context(name: "ByteReadRecorder").flatMap { context in
             if let future = (context.handler as? ReadRecorder<T>)?.notifyForDatagrams(count) {
                 return future
@@ -72,7 +73,7 @@ extension Channel {
     }
 }
 
-final class ReadRecorder<DataType>: ChannelInboundHandler {
+final class ReadRecorder<DataType: Sendable>: ChannelInboundHandler {
     typealias InboundIn = DataType
     typealias InboundOut = DataType
 
@@ -144,22 +145,35 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
         group: NIOTSEventLoopGroup,
         host: String = "127.0.0.1",
         port: Int = 0,
-        onConnect: @escaping (Channel) -> Void
+        onConnect: @escaping @Sendable (Channel) -> Void
     ) throws -> Channel {
         try NIOTSDatagramListenerBootstrap(group: group)
             .childChannelInitializer { childChannel in
                 onConnect(childChannel)
-                return childChannel.pipeline.addHandler(ReadRecorder<ByteBuffer>(), name: "ByteReadRecorder")
+                return childChannel.eventLoop.makeCompletedFuture {
+                    try childChannel.pipeline.syncOperations.addHandler(
+                        ReadRecorder<ByteBuffer>(),
+                        name: "ByteReadRecorder"
+                    )
+                }
             }
             .bind(host: host, port: port)
             .wait()
     }
 
-    private func buildClientChannel(group: NIOTSEventLoopGroup, host: String = "127.0.0.1", port: Int) throws -> Channel
-    {
+    private func buildClientChannel(
+        group: NIOTSEventLoopGroup,
+        host: String = "127.0.0.1",
+        port: Int
+    ) throws -> Channel {
         try NIOTSDatagramBootstrap(group: group)
             .channelInitializer { channel in
-                channel.pipeline.addHandler(ReadRecorder<ByteBuffer>(), name: "ByteReadRecorder")
+                channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandler(
+                        ReadRecorder<ByteBuffer>(),
+                        name: "ByteReadRecorder"
+                    )
+                }
             }
             .connect(resolver: NonBlockingResolver(eventLoopGroup: group), host: host, port: port)
             .wait()
@@ -198,7 +212,7 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
     }
 
     func testSyncOptionsAreSupported() throws {
-        func testSyncOptions(_ channel: Channel) {
+        @Sendable func testSyncOptions(_ channel: Channel) {
             if let sync = channel.syncOptions {
                 do {
                     let endpointReuse = try sync.getOption(NIOTSChannelOptions.allowLocalEndpointReuse)
@@ -221,7 +235,12 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
             .childChannelInitializer { channel in
                 testSyncOptions(channel)
                 promise.succeed(channel)
-                return channel.pipeline.addHandler(ReadRecorder<ByteBuffer>(), name: "ByteReadRecorder")
+                return channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandler(
+                        ReadRecorder<ByteBuffer>(),
+                        name: "ByteReadRecorder"
+                    )
+                }
             }
             .bind(host: "localhost", port: 0)
             .wait()
@@ -241,6 +260,54 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
         let serverHandle = try promise.futureResult.wait()
         _ = try serverHandle.waitForDatagrams(count: 1)
         XCTAssertNoThrow(try connection.close().wait())
+    }
+
+    func testNWParametersConfigurator() async throws {
+        try await withEventLoopGroup { group in
+            let configuratorServerListenerCounter = NIOLockedValueBox(0)
+            let configuratorServerConnectionCounter = NIOLockedValueBox(0)
+            let configuratorClientConnectionCounter = NIOLockedValueBox(0)
+            let waitForConnectionHandler = WaitForConnectionHandler(
+                connectionPromise: group.next().makePromise()
+            )
+
+            let listenerChannel = try await NIOTSDatagramListenerBootstrap(group: group)
+                .childChannelInitializer { connectionChannel in
+                    connectionChannel.eventLoop.makeCompletedFuture {
+                        try connectionChannel.pipeline.syncOperations.addHandler(waitForConnectionHandler)
+                    }
+                }
+                .configureNWParameters { _ in
+                    configuratorServerListenerCounter.withLockedValue { $0 += 1 }
+                }
+                .configureChildNWParameters { _ in
+                    configuratorServerConnectionCounter.withLockedValue { $0 += 1 }
+                }
+                .bind(host: "localhost", port: 0)
+                .get()
+
+            let connectionChannel: Channel = try await NIOTSDatagramBootstrap(group: group)
+                .configureNWParameters { _ in
+                    configuratorClientConnectionCounter.withLockedValue { $0 += 1 }
+                }
+                .connect(to: listenerChannel.localAddress!)
+                .get()
+
+            // Need to write something so the server can activate the connection channel: this is UDP,
+            // so there is no handshaking that happens and thus the server cannot know that the
+            // connection has been established and the channel can be activated until we receive something.
+            try await connectionChannel.writeAndFlush(ByteBuffer(bytes: [42]))
+
+            // Wait for the server to activate the connection channel to the client.
+            try await waitForConnectionHandler.connectionPromise.futureResult.get()
+
+            try await listenerChannel.close().get()
+            try await connectionChannel.close().get()
+
+            XCTAssertEqual(1, configuratorServerListenerCounter.withLockedValue { $0 })
+            XCTAssertEqual(1, configuratorServerConnectionCounter.withLockedValue { $0 })
+            XCTAssertEqual(1, configuratorClientConnectionCounter.withLockedValue { $0 })
+        }
     }
 
     func testCanExtractTheConnection() throws {

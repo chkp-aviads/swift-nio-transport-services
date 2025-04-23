@@ -43,13 +43,15 @@ import Network
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 public final class NIOTSConnectionBootstrap {
     private let group: EventLoopGroup
-    private var _channelInitializer: ((Channel) -> EventLoopFuture<Void>)
-    private var channelInitializer: ((Channel) -> EventLoopFuture<Void>) {
+    private var _channelInitializer: (@Sendable (Channel) -> EventLoopFuture<Void>)
+    private var channelInitializer: (@Sendable (Channel) -> EventLoopFuture<Void>) {
         if let protocolHandlers = self.protocolHandlers {
             let channelInitializer = self._channelInitializer
             return { channel in
                 channelInitializer(channel).flatMap {
-                    channel.pipeline.addHandlers(protocolHandlers(), position: .first)
+                    channel.eventLoop.makeCompletedFuture {
+                        try channel.pipeline.syncOperations.addHandlers(protocolHandlers(), position: .first)
+                    }
                 }
             }
         } else {
@@ -61,8 +63,8 @@ public final class NIOTSConnectionBootstrap {
     private var qos: DispatchQoS?
     private var tcpOptions: NWProtocolTCP.Options = .init()
     private var tlsOptions: NWProtocolTLS.Options?
-    private var protocolHandlers: (() -> [ChannelHandler])? = nil
-    private var requiredInterface : NWInterface?
+    private var protocolHandlers: (@Sendable () -> [ChannelHandler])? = nil
+    private var nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
 
     /// Create a `NIOTSConnectionBootstrap` on the `EventLoopGroup` `group`.
     ///
@@ -114,7 +116,8 @@ public final class NIOTSConnectionBootstrap {
     ///
     /// - parameters:
     ///     - handler: A closure that initializes the provided `Channel`.
-    public func channelInitializer(_ handler: @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
+    @preconcurrency
+    public func channelInitializer(_ handler: @escaping @Sendable (Channel) -> EventLoopFuture<Void>) -> Self {
         self._channelInitializer = handler
         return self
     }
@@ -163,6 +166,14 @@ public final class NIOTSConnectionBootstrap {
     /// service type for the event loop.
     public func withMultipath(_ type: NWParameters.MultipathServiceType) -> Self {
         self.channelOption(NIOTSChannelOptions.multipathServiceType, value: type)
+    }
+
+    /// Customise the `NWParameters` to be used when creating the connection.
+    public func configureNWParameters(
+        _ configurator: @Sendable @escaping (NWParameters) -> Void
+    ) -> Self {
+        self.nwParametersConfigurator = configurator
+        return self
     }
 
     /// Specify the `host` and `port` to connect to for the TCP `Channel` that will be established.
@@ -225,16 +236,16 @@ public final class NIOTSConnectionBootstrap {
     public func connectResolving(host: String, port: Int) -> EventLoopFuture<Channel> {
         return self.group.next().makeFutureWithTask {
             return try SocketAddress.makeAddressResolvingHost(host, port: port)
-        }.flatMap { address in
+        }.assumeIsolated().flatMap { address in
             return self.connect(to: address)
-        }
+        }.nonisolated()
     }
     
     /// Connect to a given host and port using the given resolver
-    public func connect(resolver: Resolver, host: String, port: Int)-> EventLoopFuture<Channel> {
-        let eventLoop = self.group.next()
-        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { event, family in
-            return self.connect(shouldRegister: true) { channel, promise in
+    public func connect(resolver: Resolver & Sendable, host: String, port: Int)-> EventLoopFuture<Channel> {
+        let eventLoop = self.group.next() as! NIOTSEventLoop
+        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { [tcpOptions, tlsOptions, qos, channelOptions, connectTimeout, channelInitializer, nwParametersConfigurator] event, family in
+            return NIOTSConnectionBootstrap.initializeAndRegisterChannel(existingNWConnection: nil, shouldRegister: true, eventLoop: eventLoop, tcpOptions: tcpOptions, tlsOptions: tlsOptions, qos: qos, channelOptions: channelOptions, connectTimeout: connectTimeout, channelInitializer: channelInitializer, nwParametersConfigurator: nwParametersConfigurator) { channel, promise in
                 promise.succeed()
             }
         }.resolveAndConnect()
@@ -250,36 +261,46 @@ public final class NIOTSConnectionBootstrap {
             channel.registerAlreadyConfigured0(promise: promise)
         }
     }
-
-    private func connect(
+    
+    // Workaround to make connect sendable
+    private static func initializeAndRegisterChannel(
         existingNWConnection: NWConnection? = nil,
         shouldRegister: Bool,
-        _ connectAction: @escaping (NIOTSConnectionChannel, EventLoopPromise<Void>) -> Void
+        eventLoop: NIOTSEventLoop,
+        tcpOptions: NWProtocolTCP.Options,
+        tlsOptions: NWProtocolTLS.Options?,
+        qos: DispatchQoS?,
+        channelOptions : ChannelOptions.Storage,
+        connectTimeout: TimeAmount,
+        channelInitializer: (@escaping @Sendable (Channel) -> EventLoopFuture<Void>),
+        nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?,
+        _ connectAction: @Sendable @escaping (
+            NIOTSConnectionChannel,
+            EventLoopPromise<Void>
+        ) -> Void
     ) -> EventLoopFuture<Channel> {
         let conn: NIOTSConnectionChannel
         if let newConnection = existingNWConnection {
             conn = NIOTSConnectionChannel(
                 wrapping: newConnection,
-                on: self.group.next() as! NIOTSEventLoop,
-                tcpOptions: self.tcpOptions,
-                tlsOptions: self.tlsOptions,
-                requiredInterface: self.requiredInterface
+                on: eventLoop, //self.group.next() as! NIOTSEventLoop,
+                tcpOptions: tcpOptions,
+                tlsOptions: tlsOptions,
+                nwParametersConfigurator: nwParametersConfigurator
             )
         } else {
             conn = NIOTSConnectionChannel(
-                eventLoop: self.group.next() as! NIOTSEventLoop,
-                qos: self.qos,
-                tcpOptions: self.tcpOptions,
-                tlsOptions: self.tlsOptions,
-                requiredInterface: self.requiredInterface
+                eventLoop: eventLoop, //self.group.next() as! NIOTSEventLoop,
+                qos: qos,
+                tcpOptions: tcpOptions,
+                tlsOptions: tlsOptions,
+                nwParametersConfigurator: nwParametersConfigurator
             )
         }
-        let initializer = self.channelInitializer
-        let channelOptions = self.channelOptions
         
         return conn.eventLoop.flatSubmit {
             channelOptions.applyAllChannelOptions(to: conn).flatMap {
-                initializer(conn)
+                channelInitializer(conn)
             }.flatMap {
                 conn.eventLoop.assertInEventLoop()
                 if shouldRegister {
@@ -290,11 +311,11 @@ public final class NIOTSConnectionBootstrap {
             }.flatMap {
                 let connectPromise: EventLoopPromise<Void> = conn.eventLoop.makePromise()
                 connectAction(conn, connectPromise)
-                let cancelTask = conn.eventLoop.scheduleTask(in: self.connectTimeout) {
-                    connectPromise.fail(ChannelError.connectTimeout(self.connectTimeout))
+                let cancelTask = conn.eventLoop.scheduleTask(in: connectTimeout) {
+                    connectPromise.fail(ChannelError.connectTimeout(connectTimeout))
                     conn.close(promise: nil)
                 }
-
+                
                 connectPromise.futureResult.whenComplete { (_: Result<Void, Error>) in
                     cancelTask.cancel()
                 }
@@ -306,21 +327,27 @@ public final class NIOTSConnectionBootstrap {
         }
     }
 
+    private func connect(
+        existingNWConnection: NWConnection? = nil,
+        shouldRegister: Bool,
+        _ connectAction: @Sendable @escaping (
+            NIOTSConnectionChannel,
+            EventLoopPromise<Void>
+        ) -> Void
+    ) -> EventLoopFuture<Channel> {
+        return NIOTSConnectionBootstrap.initializeAndRegisterChannel(existingNWConnection: existingNWConnection, shouldRegister: shouldRegister, eventLoop: self.group.next() as! NIOTSEventLoop, tcpOptions: self.tcpOptions, tlsOptions: self.tlsOptions, qos: self.qos, channelOptions: self.channelOptions, connectTimeout: self.connectTimeout, channelInitializer: self.channelInitializer, nwParametersConfigurator: self.nwParametersConfigurator, connectAction)
+    }
+
     /// Sets the protocol handlers that will be added to the front of the `ChannelPipeline` right after the
     /// `channelInitializer` has been called.
     ///
     /// Per bootstrap, you can only set the `protocolHandlers` once. Typically, `protocolHandlers` are used for the TLS
     /// implementation. Most notably, `NIOClientTCPBootstrap`, NIO's "universal bootstrap" abstraction, uses
     /// `protocolHandlers` to add the required `ChannelHandler`s for many TLS implementations.
-    public func protocolHandlers(_ handlers: @escaping () -> [ChannelHandler]) -> Self {
+    @preconcurrency
+    public func protocolHandlers(_ handlers: @Sendable @escaping () -> [ChannelHandler]) -> Self {
         precondition(self.protocolHandlers == nil, "protocol handlers can only be set once")
         self.protocolHandlers = handlers
-        return self
-    }
-    
-    public func requiredInterface(_ requiredInterface: NWInterface?) -> Self {
-        precondition(self.requiredInterface == nil, "required interface can only be set once")
-        self.requiredInterface = requiredInterface
         return self
     }
 }
@@ -452,10 +479,10 @@ extension NIOTSConnectionBootstrap {
     }
 
     @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-    private func connect0<ChannelInitializerResult>(
+    private func connect0<ChannelInitializerResult: Sendable>(
         existingNWConnection: NWConnection? = nil,
         channelInitializer: @escaping @Sendable (Channel) -> EventLoopFuture<ChannelInitializerResult>,
-        registration: @escaping (NIOTSConnectionChannel, EventLoopPromise<Void>) -> Void
+        registration: @Sendable @escaping (NIOTSConnectionChannel, EventLoopPromise<Void>) -> Void
     ) -> EventLoopFuture<ChannelInitializerResult> {
         let connectionChannel: NIOTSConnectionChannel
         if let newConnection = existingNWConnection {
@@ -464,7 +491,7 @@ extension NIOTSConnectionBootstrap {
                 on: self.group.next() as! NIOTSEventLoop,
                 tcpOptions: self.tcpOptions,
                 tlsOptions: self.tlsOptions,
-                requiredInterface: self.requiredInterface
+                nwParametersConfigurator: self.nwParametersConfigurator
             )
         } else {
             connectionChannel = NIOTSConnectionChannel(
@@ -472,23 +499,23 @@ extension NIOTSConnectionBootstrap {
                 qos: self.qos,
                 tcpOptions: self.tcpOptions,
                 tlsOptions: self.tlsOptions,
-                requiredInterface: self.requiredInterface
+                nwParametersConfigurator: self.nwParametersConfigurator
             )
         }
-        let channelInitializer = { (channel: Channel) -> EventLoopFuture<ChannelInitializerResult> in
-            let initializer = self.channelInitializer
-            return initializer(channel).flatMap { channelInitializer(channel) }
+        let initializer = self.channelInitializer
+        let channelInitializer = { @Sendable (channel: Channel) -> EventLoopFuture<ChannelInitializerResult> in
+            initializer(channel).flatMap { channelInitializer(channel) }
         }
         let channelOptions = self.channelOptions
 
-        return connectionChannel.eventLoop.flatSubmit {
+        return connectionChannel.eventLoop.flatSubmit { [connectTimeout] in
             channelOptions.applyAllChannelOptions(to: connectionChannel).flatMap {
                 channelInitializer(connectionChannel)
             }.flatMap { result -> EventLoopFuture<ChannelInitializerResult> in
                 let connectPromise: EventLoopPromise<Void> = connectionChannel.eventLoop.makePromise()
                 registration(connectionChannel, connectPromise)
-                let cancelTask = connectionChannel.eventLoop.scheduleTask(in: self.connectTimeout) {
-                    connectPromise.fail(ChannelError.connectTimeout(self.connectTimeout))
+                let cancelTask = connectionChannel.eventLoop.scheduleTask(in: connectTimeout) {
+                    connectPromise.fail(ChannelError.connectTimeout(connectTimeout))
                     connectionChannel.close(promise: nil)
                 }
 

@@ -57,15 +57,19 @@ import Network
 public final class NIOTSDatagramListenerBootstrap {
     private let group: EventLoopGroup
     private let childGroup: EventLoopGroup
-    private var serverChannelInit: ((Channel) -> EventLoopFuture<Void>)?
-    private var childChannelInit: ((Channel) -> EventLoopFuture<Void>)?
+    private var serverChannelInit: (@Sendable (Channel) -> EventLoopFuture<Void>)?
+    private var childChannelInit: (@Sendable (Channel) -> EventLoopFuture<Void>)?
     private var serverChannelOptions = ChannelOptions.Storage()
     private var childChannelOptions = ChannelOptions.Storage()
     private var serverQoS: DispatchQoS?
     private var childQoS: DispatchQoS?
     private var udpOptions: NWProtocolUDP.Options = .init()
+    private var childUDPOptions: NWProtocolUDP.Options = .init()
     private var tlsOptions: NWProtocolTLS.Options?
+    private var childTLSOptions: NWProtocolTLS.Options?
     private var bindTimeout: TimeAmount?
+    private var nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
+    private var childNWParametersConfigurator: (@Sendable (NWParameters) -> Void)?
 
     /// Create a ``NIOTSListenerBootstrap`` for the `EventLoopGroup` `group`.
     ///
@@ -154,7 +158,9 @@ public final class NIOTSDatagramListenerBootstrap {
     ///
     /// - parameters:
     ///     - initializer: A closure that initializes the provided `Channel`.
-    public func serverChannelInitializer(_ initializer: @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
+    @preconcurrency
+    public func serverChannelInitializer(_ initializer: @Sendable @escaping (Channel) -> EventLoopFuture<Void>) -> Self
+    {
         self.serverChannelInit = initializer
         return self
     }
@@ -167,7 +173,8 @@ public final class NIOTSDatagramListenerBootstrap {
     ///
     /// - parameters:
     ///     - initializer: A closure that initializes the provided `Channel`.
-    public func childChannelInitializer(_ initializer: @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
+    @preconcurrency
+    public func childChannelInitializer(_ initializer: @Sendable @escaping (Channel) -> EventLoopFuture<Void>) -> Self {
         self.childChannelInit = initializer
         return self
     }
@@ -221,15 +228,43 @@ public final class NIOTSDatagramListenerBootstrap {
         return self
     }
 
-    /// Specifies the TCP options to use on the child `Channel`s.
+    /// Specifies the TCP options to use on the listener.
     public func udpOptions(_ options: NWProtocolUDP.Options) -> Self {
         self.udpOptions = options
         return self
     }
 
-    /// Specifies the TLS options to use on the child `Channel`s.
+    /// Specifies the TCP options to use on the child `Channel`s.
+    public func childUDPOptions(_ options: NWProtocolUDP.Options) -> Self {
+        self.childUDPOptions = options
+        return self
+    }
+
+    /// Specifies the TLS options to use on the listener.
     public func tlsOptions(_ options: NWProtocolTLS.Options) -> Self {
         self.tlsOptions = options
+        return self
+    }
+
+    /// Specifies the TLS options to use on the child `Channel`s.
+    public func childTLSOptions(_ options: NWProtocolTLS.Options) -> Self {
+        self.childTLSOptions = options
+        return self
+    }
+
+    /// Customise the `NWParameters` to be used when creating the `NWConnection` for the listener.
+    public func configureNWParameters(
+        _ configurator: @Sendable @escaping (NWParameters) -> Void
+    ) -> Self {
+        self.nwParametersConfigurator = configurator
+        return self
+    }
+
+    /// Customise the `NWParameters` to be used when creating the `NWConnection`s for the child `Channel`s.
+    public func configureChildNWParameters(
+        _ configurator: @Sendable @escaping (NWParameters) -> Void
+    ) -> Self {
+        self.childNWParametersConfigurator = configurator
         return self
     }
 
@@ -305,10 +340,13 @@ public final class NIOTSDatagramListenerBootstrap {
     private func bind0(
         existingNWListener: NWListener? = nil,
         shouldRegister: Bool,
-        _ binder: @escaping (NIOTSDatagramListenerChannel, EventLoopPromise<Void>) -> Void
+        _ binder: @Sendable @escaping (NIOTSDatagramListenerChannel, EventLoopPromise<Void>) -> Void
     ) -> EventLoopFuture<Channel> {
         let eventLoop = self.group.next() as! NIOTSEventLoop
-        let serverChannelInit = self.serverChannelInit ?? { _ in eventLoop.makeSucceededFuture(()) }
+        let serverChannelInit =
+            self.serverChannelInit ?? {
+                @Sendable _ in eventLoop.makeSucceededFuture(())
+            }
         let childChannelInit = self.childChannelInit
         let serverChannelOptions = self.serverChannelOptions
         let childChannelOptions = self.childChannelOptions
@@ -321,10 +359,12 @@ public final class NIOTSDatagramListenerBootstrap {
                 qos: self.serverQoS,
                 udpOptions: self.udpOptions,
                 tlsOptions: self.tlsOptions,
+                nwParametersConfigurator: self.nwParametersConfigurator,
                 childLoopGroup: self.childGroup,
                 childChannelQoS: self.childQoS,
-                childUDPOptions: self.udpOptions,
-                childTLSOptions: self.tlsOptions
+                childUDPOptions: self.childUDPOptions,
+                childTLSOptions: self.childTLSOptions,
+                childNWParametersConfigurator: self.childNWParametersConfigurator
             )
         } else {
             serverChannel = NIOTSDatagramListenerChannel(
@@ -332,24 +372,28 @@ public final class NIOTSDatagramListenerBootstrap {
                 qos: self.serverQoS,
                 udpOptions: self.udpOptions,
                 tlsOptions: self.tlsOptions,
+                nwParametersConfigurator: self.nwParametersConfigurator,
                 childLoopGroup: self.childGroup,
                 childChannelQoS: self.childQoS,
-                childUDPOptions: self.udpOptions,
-                childTLSOptions: self.tlsOptions
+                childUDPOptions: self.childUDPOptions,
+                childTLSOptions: self.childTLSOptions,
+                childNWParametersConfigurator: self.childNWParametersConfigurator
             )
         }
 
-        return eventLoop.submit {
+        return eventLoop.submit { [bindTimeout] in
             serverChannelOptions.applyAllChannelOptions(to: serverChannel).flatMap {
                 serverChannelInit(serverChannel)
             }.flatMap {
                 eventLoop.assertInEventLoop()
-                return serverChannel.pipeline.addHandler(
-                    AcceptHandler<NIOTSDatagramChannel>(
-                        childChannelInitializer: childChannelInit,
-                        childChannelOptions: childChannelOptions
+                return eventLoop.makeCompletedFuture {
+                    try serverChannel.pipeline.syncOperations.addHandler(
+                        AcceptHandler<NIOTSDatagramChannel>(
+                            childChannelInitializer: childChannelInit,
+                            childChannelOptions: childChannelOptions
+                        )
                     )
-                )
+                }
             }.flatMap {
                 if shouldRegister {
                     return serverChannel.register()
@@ -360,7 +404,7 @@ public final class NIOTSDatagramListenerBootstrap {
                 let bindPromise = eventLoop.makePromise(of: Void.self)
                 binder(serverChannel, bindPromise)
 
-                if let bindTimeout = self.bindTimeout {
+                if let bindTimeout = bindTimeout {
                     let cancelTask = eventLoop.scheduleTask(in: bindTimeout) {
                         bindPromise.fail(NIOTSErrors.BindTimeout(timeout: bindTimeout))
                         serverChannel.close(promise: nil)
@@ -382,4 +426,7 @@ public final class NIOTSDatagramListenerBootstrap {
         }
     }
 }
+
+@available(*, unavailable)
+extension NIOTSDatagramListenerBootstrap: Sendable {}
 #endif

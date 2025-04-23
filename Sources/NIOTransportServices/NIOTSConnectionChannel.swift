@@ -164,8 +164,12 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
     /// An `EventLoopPromise` that will be succeeded or failed when a connection attempt succeeds or fails.
     internal var connectPromise: EventLoopPromise<Void>?
 
+    internal let nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
+
     internal var parameters: NWParameters {
-        NWParameters(tls: self.tlsOptions, tcp: self.tcpOptions)
+        let parameters = NWParameters(tls: self.tlsOptions, tcp: self.tcpOptions)
+        self.nwParametersConfigurator?(parameters)
+        return parameters
     }
     
     internal var requiredInterface : NWInterface?
@@ -245,7 +249,7 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
         maximumReceiveLength: Int = 8192,
         tcpOptions: NWProtocolTCP.Options,
         tlsOptions: NWProtocolTLS.Options?,
-	requiredInterface: NWInterface?
+        nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
     ) {
         self.tsEventLoop = eventLoop
         self.closePromise = eventLoop.makePromise()
@@ -255,7 +259,7 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
         self.connectionQueue = eventLoop.channelQueue(label: "nio.nioTransportServices.connectionchannel", qos: qos)
         self.tcpOptions = tcpOptions
         self.tlsOptions = tlsOptions
-        self.requiredInterface = requiredInterface
+        self.nwParametersConfigurator = nwParametersConfigurator
 
         // Must come last, as it requires self to be completely initialized.
         self._pipeline = ChannelPipeline(channel: self)
@@ -271,7 +275,7 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
         maximumReceiveLength: Int = 8192,
         tcpOptions: NWProtocolTCP.Options,
         tlsOptions: NWProtocolTLS.Options?,
-	requiredInterface: NWInterface? = nil
+        nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
     ) {
         self.init(
             eventLoop: eventLoop,
@@ -281,7 +285,7 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
             maximumReceiveLength: maximumReceiveLength,
             tcpOptions: tcpOptions,
             tlsOptions: tlsOptions,
-	    requiredInterface: requiredInterface
+            nwParametersConfigurator: nwParametersConfigurator
         )
         self.connection = connection
     }
@@ -412,7 +416,7 @@ extension NIOTSConnectionChannel {
             // APIs.
             var buffer = self.allocator.buffer(capacity: content.count)
             buffer.writeBytes(content)
-            self.pipeline.fireChannelRead(NIOAny(buffer))
+            self.pipeline.fireChannelRead(buffer)
             self.pipeline.fireChannelReadComplete()
         }
 
@@ -573,5 +577,8 @@ extension Channel {
         return try channel.metadata(definition: definition)
     }
 }
+
+@available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
+extension NIOTSConnectionChannel: @unchecked Sendable {}
 
 #endif
