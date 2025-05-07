@@ -138,7 +138,7 @@ final class ReadRecorder<DataType: Sendable>: ChannelInboundHandler {
 
 // Mimicks the DatagramChannelTest from apple/swift-nio
 @available(macOS 10.14, iOS 12.0, tvOS 12.0, watchOS 6, *)
-final class NIOTSDatagramConnectionChannelTests: XCTestCase {
+final class NIOTSDatagramBootstrapTests: XCTestCase {
     private var group: NIOTSEventLoopGroup!
 
     private func buildServerChannel(
@@ -166,7 +166,7 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
         host: String = "127.0.0.1",
         port: Int
     ) throws -> Channel {
-        try NIOTSDatagramBootstrap(group: group)
+        try NIOTSDatagramConnectionBootstrap(group: group)
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.addHandler(
@@ -248,7 +248,7 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
             XCTAssertNoThrow(try listener.close().wait())
         }
 
-        let connection = try! NIOTSDatagramBootstrap(group: self.group)
+        let connection = try! NIOTSDatagramConnectionBootstrap(group: self.group)
             .channelInitializer { channel in
                 testSyncOptions(channel)
                 return channel.eventLoop.makeSucceededVoidFuture()
@@ -286,7 +286,7 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
                 .bind(host: "localhost", port: 0)
                 .get()
 
-            let connectionChannel: Channel = try await NIOTSDatagramBootstrap(group: group)
+            let connectionChannel: Channel = try await NIOTSDatagramConnectionBootstrap(group: group)
                 .configureNWParameters { _ in
                     configuratorClientConnectionCounter.withLockedValue { $0 += 1 }
                 }
@@ -321,7 +321,7 @@ final class NIOTSDatagramConnectionChannelTests: XCTestCase {
             XCTAssertNoThrow(try listener.close().wait())
         }
 
-        _ = try NIOTSDatagramBootstrap(group: self.group)
+        _ = try NIOTSDatagramConnectionBootstrap(group: self.group)
             .channelInitializer { channel in
                 let conn = try! channel.syncOptions!.getOption(NIOTSChannelOptions.connection)
                 XCTAssertNil(conn)
