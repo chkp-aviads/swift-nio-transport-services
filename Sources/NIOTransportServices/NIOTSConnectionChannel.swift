@@ -22,6 +22,7 @@ import Dispatch
 import Network
 import Security
 import Atomics
+import Logging
 
 /// Channel options for the connection channel.
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
@@ -165,6 +166,10 @@ internal final class NIOTSConnectionChannel: StateManagedNWConnectionChannel {
     internal var connectPromise: EventLoopPromise<Void>?
 
     internal let nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
+    
+    internal var storage = [String : Hashable & Sendable]()
+    internal let channelID = UUID()
+    internal var logger: Logger?
 
     internal var parameters: NWParameters {
         let parameters = NWParameters(tls: self.tlsOptions, tcp: self.tcpOptions)

@@ -14,6 +14,8 @@
 #if canImport(Network)
 import NIOCore
 import Network
+import Foundation
+import Logging
 
 /// Options that can be set explicitly and only on bootstraps provided by `NIOTransportServices`.
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
@@ -218,5 +220,22 @@ public typealias NIOTSWaitForActivityOption = NIOTSChannelOptions.Types.NIOTSWai
 @available(*, deprecated, renamed: "NIOTSChannelOptions.Types.NIOTSEnablePeerToPeerOption")
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 public typealias NIOTSEnablePeerToPeerOption = NIOTSChannelOptions.Types.NIOTSEnablePeerToPeerOption
+
+extension ChannelOptions.Types {
+    public struct SendableStorage: ChannelOption, Sendable {
+        public typealias Value = [String : Hashable & Sendable]
+        public init() {}
+    }
+    
+    public struct ChannelID: ChannelOption, Equatable {
+        public typealias Value = UUID
+        public init() {}
+    }
+    
+    public struct LoggerOption: ChannelOption, Equatable {
+        public typealias Value = Logging.Logger
+        public init() {}
+    }
+}
 
 #endif

@@ -22,6 +22,7 @@ import NIOTLS
 import Dispatch
 import Network
 import Security
+import Logging
 
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 internal final class NIOTSDatagramConnectionChannel: StateManagedNWConnectionChannel {
@@ -142,6 +143,10 @@ internal final class NIOTSDatagramConnectionChannel: StateManagedNWConnectionCha
     internal var requiredInterface : NWInterface?
 
     internal let nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
+    
+    internal var storage = [String : Hashable & Sendable]()
+    internal let channelID = UUID()
+    internal var logger: Logger?
 
     var parameters: NWParameters {
         let parameters = NWParameters(dtls: self.tlsOptions, udp: self.udpOptions)
