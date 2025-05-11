@@ -144,7 +144,7 @@ internal final class NIOTSDatagramConnectionChannel: StateManagedNWConnectionCha
 
     internal let nwParametersConfigurator: (@Sendable (NWParameters) -> Void)?
     
-    internal var storage = [String : Hashable & Sendable]()
+    internal var storage = [String : any Hashable & Sendable]()
     internal let channelID = UUID()
     internal var logger: Logger?
 

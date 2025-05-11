@@ -88,7 +88,7 @@ internal protocol StateManagedNWConnectionChannel: StateManagedChannel where Act
 
     var nwParametersConfigurator: (@Sendable (NWParameters) -> Void)? { get }
     
-    var storage: [String : Hashable & Sendable] { get set }
+    var storage: [String : any Hashable & Sendable] { get set }
     var logger: Logger? { get set }
     var channelID : UUID { get }
 
@@ -606,7 +606,7 @@ extension StateManagedNWConnectionChannel {
         case is ChannelOptions.Types.SendableStorage:
             self.storage = value as! ChannelOptions.Types.SendableStorage.Value
         case is ChannelOptions.Types.LoggerOption:
-            self.logger = value as! ChannelOptions.Types.LoggerOption.Value
+            self.logger = value as? ChannelOptions.Types.LoggerOption.Value
             
         default:
             try self.setChannelSpecificOption0(option: option, value: value)

@@ -223,7 +223,7 @@ public typealias NIOTSEnablePeerToPeerOption = NIOTSChannelOptions.Types.NIOTSEn
 
 extension ChannelOptions.Types {
     public struct SendableStorage: ChannelOption, Sendable {
-        public typealias Value = [String : Hashable & Sendable]
+        public typealias Value = [String : any Hashable & Sendable]
         public init() {}
     }
     

@@ -41,6 +41,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/chkp-aviads/swift-nio.git", from: "2.83.0"),
         .package(url: "https://github.com/apple/swift-atomics.git", from: "1.0.2"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.3"),
     ],
     targets: [
         .target(
@@ -51,6 +52,7 @@ let package = Package(
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(name: "NIOTLS", package: "swift-nio"),
                 .product(name: "Atomics", package: "swift-atomics"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             swiftSettings: strictConcurrencySettings
         ),
