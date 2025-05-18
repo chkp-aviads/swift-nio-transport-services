@@ -305,7 +305,7 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
             try await connectionChannel.close().get()
 
             XCTAssertEqual(1, configuratorServerListenerCounter.withLockedValue { $0 })
-            XCTAssertEqual(1, configuratorServerConnectionCounter.withLockedValue { $0 })
+            XCTAssertEqual(2, configuratorServerConnectionCounter.withLockedValue { $0 })
             XCTAssertEqual(1, configuratorClientConnectionCounter.withLockedValue { $0 })
         }
     }
