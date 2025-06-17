@@ -361,5 +361,25 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
             XCTAssertNotNil(listener)
         }.wait()
     }
+
+    func testConnectResolving() throws {
+        let serverHandlePromise = group.next().makePromise(of: Channel.self)
+        let server = try buildServerChannel(group: group, onConnect: serverHandlePromise.succeed)
+        defer { XCTAssertNoThrow(try server.close().wait()) }
+
+        let client = try NIOTSDatagramConnectionBootstrap(group: group)
+            .connectResolving(host: "127.0.0.1", port: server.localAddress!.port!)
+            .wait()
+        defer { XCTAssertNoThrow(try client.close().wait()) }
+
+        var buffer = client.allocator.buffer(capacity: 256)
+        buffer.writeStaticString("test message")
+        XCTAssertNoThrow(try client.writeAndFlush(buffer).wait())
+
+        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let received = try serverHandle.waitForDatagrams(count: 1)
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received[0], buffer)
+    }
 }
 #endif

@@ -186,11 +186,14 @@ public final class NIOTSDatagramConnectionBootstrap {
     // We do so because connect(endpoint:) stalls on non-existent host untill conenctTimeout
     // By resolving ourselves we fail fast on bad hostname
     public func connectResolving(host: String, port: Int) -> EventLoopFuture<Channel> {
-        return self.group.next().makeFutureWithTask {
-            return try SocketAddress.makeAddressResolvingHost(host, port: port)
-        }.assumeIsolated().flatMap { address in
-            return self.connect(to: address)
-        }.nonisolated()
+        self.connect0 { channel, promise in
+            do {
+                let address = try SocketAddress.makeAddressResolvingHost(host, port: port)
+                return channel.connect(to: address, promise: promise)
+            } catch let error {
+                promise.fail(error)
+            }
+        }
     }
 
     /// Specify the `unixDomainSocket` path to connect to for the UDS `Channel` that will be established.
