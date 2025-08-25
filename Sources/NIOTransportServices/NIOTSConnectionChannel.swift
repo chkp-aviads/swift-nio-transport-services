@@ -601,6 +601,7 @@ extension Channel {
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 extension NIOTSConnectionChannel: @unchecked Sendable {}
 
+@available(macOS 10.14, *)
 extension NIOTSConnectionChannel : CustomDebugStringConvertible {
     public var debugDescription: String {
         "[\(self.channelID.uuidString)] state: \(self.state)\n\(self.pipeline)"
