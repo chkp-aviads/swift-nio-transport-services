@@ -1,9 +1,9 @@
-// swift-tools-version:5.10
+// swift-tools-version:6.0
 //===----------------------------------------------------------------------===//
 //
 // This source file is part of the SwiftNIO open source project
 //
-// Copyright (c) 2017-2018 Apple Inc. and the SwiftNIO project authors
+// Copyright (c) 2017-2025 Apple Inc. and the SwiftNIO project authors
 // Licensed under Apache License v2.0
 //
 // See LICENSE.txt for license information
@@ -19,10 +19,6 @@ let strictConcurrencyDevelopment = false
 
 let strictConcurrencySettings: [SwiftSetting] = {
     var initialSettings: [SwiftSetting] = []
-    initialSettings.append(contentsOf: [
-        .enableUpcomingFeature("StrictConcurrency"),
-        .enableUpcomingFeature("InferSendableFromCaptures"),
-    ])
 
     if strictConcurrencyDevelopment {
         // -warnings-as-errors here is a workaround so that IDE-based development can
@@ -72,12 +68,20 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ]
         ),
+        .executableTarget(
+            name: "NIOTSEchoClient",
+            dependencies: [
+                "NIOTransportServices",
+                .product(name: "NIOCore", package: "swift-nio"),
+            ]
+        ),
         .testTarget(
             name: "NIOTransportServicesTests",
             dependencies: [
                 "NIOTransportServices",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOEmbedded", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "Atomics", package: "swift-atomics"),
             ],
             swiftSettings: strictConcurrencySettings

@@ -88,6 +88,11 @@ internal protocol StateManagedNWConnectionChannel: StateManagedChannel where Act
 
     var nwParametersConfigurator: (@Sendable (NWParameters) -> Void)? { get }
     
+    
+    /// Indicates whether this connection channel carries datagrams (UDP) rather than a byte stream (TCP/TLS).
+    /// Defaults to `false` and is overridden by datagram-specific channel implementations.
+    var isDatagramChannel: Bool { get }
+
     var storage: [String : any Hashable & Sendable] { get set }
     var logger: Logger? { get set }
     var channelID : UUID { get }
@@ -106,6 +111,8 @@ extension StateManagedNWConnectionChannel {
     public var _channelCore: ChannelCore {
         self
     }
+
+    internal var isDatagramChannel: Bool { false }
 
     /// The local address for this channel.
     public var localAddress: SocketAddress? {
@@ -380,7 +387,9 @@ extension StateManagedNWConnectionChannel {
     private func stateUpdateHandler(newState: NWConnection.State) {
         switch newState {
         case .setup:
-            preconditionFailure("Should not be told about this state.")
+            // Since iOS 18, we are occasionally informed of a change into this state.
+            // We have no specific action here.
+            break
         case .waiting(let err):
             if case .activating = self.state, self.options.waitForActivity {
                 // This means the connection cannot currently be completed. We should notify the pipeline
@@ -450,15 +459,17 @@ extension StateManagedNWConnectionChannel {
 
         // Next, we want to check if there's an error. If there is, we're going to deliver it, and then close the connection with
         // it. Otherwise, we're going to check if we read EOF, and if we did we'll close with that instead.
+        //
+        // Important: For datagram (UDP) connections, Network.framework reports `isComplete == true` for each
+        // received datagram. This does NOT indicate stream EOF. Treating it as EOF closes the connected UDP
+        // channel after the first packet ("one‑shot"). Guard against this by only considering `isComplete`
+        // a real EOF on non-datagram (stream) channels.
         if let error = error {
             self.pipeline.fireErrorCaught(error)
             self.close0(error: error, mode: .all, promise: nil)
-        } else if isComplete {
-            if let stack = parameters.defaultProtocolStack.transportProtocol, stack is NWProtocolUDP.Options {
-                // don't close the channel for UDP
-            } else {
-                self.didReadEOF()
-            }
+        } else if isComplete && !self.isDatagramChannel {
+            // Only streams should translate `isComplete` into EOF. For datagrams, continue receiving.
+            self.didReadEOF()
         }
 
         // Last, issue a new read automatically if we need to.
