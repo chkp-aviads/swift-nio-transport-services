@@ -18,6 +18,7 @@ import NIOCore
 import NIOConcurrencyHelpers
 import NIOTransportServices
 import Network
+import Logging
 
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 class NIOTSChannelOptionsTests: XCTestCase {
@@ -188,6 +189,132 @@ class NIOTSChannelOptionsTests: XCTestCase {
         )
 
         XCTAssertEqual(connectionValue, 8192)
+    }
+
+    func testSendableStorageOptionOnConnectionChannel() throws {
+        let listener = try NIOTSListenerBootstrap(group: self.group)
+            .bind(host: "localhost", port: 0).wait()
+        defer {
+            XCTAssertNoThrow(try listener.close().wait())
+        }
+
+        let connection = try NIOTSConnectionBootstrap(group: self.group)
+            .connect(to: listener.localAddress!)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try connection.close().wait())
+        }
+
+        let expected: ChannelOptions.Types.SendableStorage.Value = [
+            "int": 1 as Int,
+            "string": "two" as String,
+            "bool": true as Bool,
+        ]
+
+        XCTAssertNoThrow(try connection.setOption(ChannelOptions.Types.SendableStorage(), value: expected).wait())
+        let got = try connection.getOption(ChannelOptions.Types.SendableStorage()).wait()
+
+        XCTAssertEqual(got["int"] as? Int, 1)
+        XCTAssertEqual(got["string"] as? String, "two")
+        XCTAssertEqual(got["bool"] as? Bool, true)
+    }
+
+    func testChannelIDOptionOnConnectionChannel() throws {
+        let listener = try NIOTSListenerBootstrap(group: self.group)
+            .bind(host: "localhost", port: 0).wait()
+        defer {
+            XCTAssertNoThrow(try listener.close().wait())
+        }
+
+        let connection1 = try NIOTSConnectionBootstrap(group: self.group)
+            .connect(to: listener.localAddress!)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try connection1.close().wait())
+        }
+
+        let connection2 = try NIOTSConnectionBootstrap(group: self.group)
+            .connect(to: listener.localAddress!)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try connection2.close().wait())
+        }
+
+        let id1a = try connection1.getOption(ChannelOptions.Types.ChannelID()).wait()
+        let id1b = try connection1.getOption(ChannelOptions.Types.ChannelID()).wait()
+        XCTAssertEqual(id1a, id1b)
+
+        let id2 = try connection2.getOption(ChannelOptions.Types.ChannelID()).wait()
+        XCTAssertNotEqual(id1a, id2)
+    }
+
+    func testLoggerOptionOnConnectionChannel() throws {
+        let listener = try NIOTSListenerBootstrap(group: self.group)
+            .bind(host: "localhost", port: 0).wait()
+        defer {
+            XCTAssertNoThrow(try listener.close().wait())
+        }
+
+        let connection = try NIOTSConnectionBootstrap(group: self.group)
+            .connect(to: listener.localAddress!)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try connection.close().wait())
+        }
+
+        let logger = Logger(label: "NIOTSChannelOptionsTests")
+        XCTAssertNoThrow(try connection.setOption(ChannelOptions.Types.LoggerOption(), value: logger).wait())
+        let got = try connection.getOption(ChannelOptions.Types.LoggerOption()).wait()
+        XCTAssertEqual(got.label, logger.label)
+    }
+
+    func testSendableStorageOptionOnDatagramConnectionChannel() throws {
+        let listener = try NIOTSDatagramListenerBootstrap(group: self.group)
+            .bind(host: "localhost", port: 0).wait()
+        defer {
+            XCTAssertNoThrow(try listener.close().wait())
+        }
+
+        let connection = try NIOTSDatagramConnectionBootstrap(group: self.group)
+            .connect(to: listener.localAddress!)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try connection.close().wait())
+        }
+
+        let expected: ChannelOptions.Types.SendableStorage.Value = [
+            "int": 42 as Int,
+            "string": "hello" as String,
+        ]
+
+        XCTAssertNoThrow(try connection.setOption(ChannelOptions.Types.SendableStorage(), value: expected).wait())
+        let got = try connection.getOption(ChannelOptions.Types.SendableStorage()).wait()
+        XCTAssertEqual(got["int"] as? Int, 42)
+        XCTAssertEqual(got["string"] as? String, "hello")
+    }
+
+    func testChannelIDAndLoggerOptionsOnDatagramConnectionChannel() throws {
+        let listener = try NIOTSDatagramListenerBootstrap(group: self.group)
+            .bind(host: "localhost", port: 0).wait()
+        defer {
+            XCTAssertNoThrow(try listener.close().wait())
+        }
+
+        let connection = try NIOTSDatagramConnectionBootstrap(group: self.group)
+            .connect(to: listener.localAddress!)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try connection.close().wait())
+        }
+
+        let id1 = try connection.getOption(ChannelOptions.Types.ChannelID()).wait()
+        let id2 = try connection.getOption(ChannelOptions.Types.ChannelID()).wait()
+        XCTAssertEqual(id1, id2)
+
+        let logger = Logger(label: "NIOTSChannelOptionsTests.UDP")
+        XCTAssertNoThrow(try connection.setOption(ChannelOptions.Types.LoggerOption(), value: logger).wait())
+        let got = try connection.getOption(ChannelOptions.Types.LoggerOption()).wait()
+        XCTAssertEqual(got.label, logger.label)
     }
 }
 #endif
