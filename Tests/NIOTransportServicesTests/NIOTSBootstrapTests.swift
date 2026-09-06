@@ -453,6 +453,48 @@ final class NIOTSBootstrapTests: XCTestCase {
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received[0], buffer)
     }
+
+    /// `connectResolving` takes a different path for a hostname than for an IP literal: the literal
+    /// is parsed inline, the hostname goes through `GetaddrinfoResolver` so the blocking
+    /// `getaddrinfo` stays off the event loop. `testConnectResolving` only covers the literal.
+    func testConnectResolvingHostname() throws {
+        let group = NIOTSEventLoopGroup()
+        defer { XCTAssertNoThrow(try group.syncShutdownGracefully()) }
+
+        let serverHandlePromise = group.next().makePromise(of: Channel.self)
+        let server = try NIOTSListenerBootstrap(group: group)
+            .childChannelInitializer { connectionChannel in
+                serverHandlePromise.succeed(connectionChannel)
+                return connectionChannel.eventLoop.makeCompletedFuture {
+                    try connectionChannel.pipeline.syncOperations.addHandler(
+                        ReadRecorder<ByteBuffer>(),
+                        name: "ByteReadRecorder"
+                    )
+                }
+            }
+            .bind(host: "127.0.0.1", port: 0)
+            .wait()
+        defer { XCTAssertNoThrow(try server.close().wait()) }
+
+        let client = try NIOTSConnectionBootstrap(group: group)
+            .connectResolving(host: "localhost", port: server.localAddress!.port!)
+            .wait()
+        defer { XCTAssertNoThrow(try client.close().wait()) }
+
+        var buffer = client.allocator.buffer(capacity: 256)
+        buffer.writeStaticString("test message")
+        XCTAssertNoThrow(try client.writeAndFlush(buffer).wait())
+
+        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let received = try serverHandle.eventLoop.submit {
+            try serverHandle.pipeline.syncOperations.context(name: "ByteReadRecorder")
+        }.flatMap { context in
+            (context.handler as! ReadRecorder<ByteBuffer>).notifyForDatagrams(1)
+        }.wait()
+
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received[0], buffer)
+    }
 }
 
 extension Channel {

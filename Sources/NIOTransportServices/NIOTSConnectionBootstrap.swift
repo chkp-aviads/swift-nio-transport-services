@@ -230,18 +230,31 @@ public final class NIOTSConnectionBootstrap {
     }
     
     @available(iOS 13, macOS 10.15, *)
-    // This is similar to connect(host:port) but we resolve to SocketAddress ourselves
-    // We do so because connect(endpoint:) stalls on non-existent host untill conenctTimeout
-    // By resolving ourselves we fail fast on bad hostname
+    /// Connect to `host` and `port`, resolving the host ourselves rather than handing it to
+    /// Network.framework.
+    ///
+    /// `connect(endpoint:)` stalls on a non-existent host until `connectTimeout` elapses; resolving
+    /// up front fails fast instead.
+    ///
+    /// An IP literal is parsed inline: `SocketAddress(ipAddress:port:)` is `inet_pton`, which
+    /// neither blocks nor hits the network. A hostname goes to `GetaddrinfoResolver`, which
+    /// offloads the blocking `getaddrinfo` to a `DispatchQueue` -- resolving it here instead would
+    /// stall the event loop, and with it every other channel sharing that loop, for the duration
+    /// of the lookup. Routing hostnames through `connect(resolver:host:port:)` also picks up Happy
+    /// Eyeballs, which the single address from `makeAddressResolvingHost` never offered.
     public func connectResolving(host: String, port: Int) -> EventLoopFuture<Channel> {
-        self.connect(shouldRegister: true) { channel, promise in
-            do {
-                let address = try SocketAddress.makeAddressResolvingHost(host, port: port)
-                return channel.connect(to: address, promise: promise)
-            } catch let error {
-                promise.fail(error)
-            }
+        if let address = try? SocketAddress(ipAddress: host, port: port) {
+            return self.connect(to: address)
         }
+        return self.connect(
+            resolver: GetaddrinfoResolver(
+                loop: self.group.next(),
+                aiSocktype: .stream,
+                aiProtocol: .tcp
+            ),
+            host: host,
+            port: port
+        )
     }
     
     /// Connect to a given host and port using the given resolver

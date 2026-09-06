@@ -493,5 +493,31 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received[0], buffer)
     }
+
+    /// `connectResolving` takes a different path for a hostname than for an IP literal: the literal
+    /// is parsed inline, the hostname goes through `GetaddrinfoResolver` so the blocking
+    /// `getaddrinfo` stays off the event loop. `testConnectResolving` only covers the literal.
+    func testConnectResolvingHostname() throws {
+        let serverHandlePromise = group.next().makePromise(of: Channel.self)
+        // Bind by name, not by literal: resolving "localhost" yields ::1 ahead of 127.0.0.1, and a
+        // UDP connect completes against either without a handshake to reveal the mismatch. A
+        // v4-only server would simply never see the datagram, and this test would hang.
+        let server = try buildServerChannel(group: group, host: "localhost", onConnect: serverHandlePromise.succeed)
+        defer { XCTAssertNoThrow(try server.close().wait()) }
+
+        let client = try NIOTSDatagramConnectionBootstrap(group: group)
+            .connectResolving(host: "localhost", port: server.localAddress!.port!)
+            .wait()
+        defer { XCTAssertNoThrow(try client.close().wait()) }
+
+        var buffer = client.allocator.buffer(capacity: 256)
+        buffer.writeStaticString("test message")
+        XCTAssertNoThrow(try client.writeAndFlush(buffer).wait())
+
+        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let received = try serverHandle.waitForDatagrams(count: 1)
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received[0], buffer)
+    }
 }
 #endif
