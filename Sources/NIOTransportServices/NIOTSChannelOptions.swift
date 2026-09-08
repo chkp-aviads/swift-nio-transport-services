@@ -15,7 +15,6 @@
 import NIOCore
 import Network
 import Foundation
-import Logging
 
 /// Options that can be set explicitly and only on bootstraps provided by `NIOTransportServices`.
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
@@ -226,16 +225,9 @@ extension ChannelOptions.Types {
         public typealias Value = [String : any Hashable & Sendable]
         public init() {}
     }
-    
-    public struct ChannelID: ChannelOption, Equatable {
-        public typealias Value = UUID
-        public init() {}
-    }
-    
-    public struct LoggerOption: ChannelOption, Equatable {
-        public typealias Value = Logging.Logger
-        public init() {}
-    }
+
+    // `ChannelOptions.Types.ChannelID` is declared in NIOCore so that every transport answers it
+    // from one definition; this module implements it below against that declaration.
 }
 
 #endif

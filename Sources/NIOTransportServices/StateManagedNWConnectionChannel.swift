@@ -22,7 +22,6 @@ import NIOTLS
 import Dispatch
 import Network
 import Security
-import Logging
 
 @available(OSX 10.14, iOS 12.0, tvOS 12.0, watchOS 6.0, *)
 protocol NWConnectionSubstate: ActiveChannelSubstate {
@@ -94,8 +93,7 @@ internal protocol StateManagedNWConnectionChannel: StateManagedChannel where Act
     var isDatagramChannel: Bool { get }
 
     var storage: [String : any Hashable & Sendable] { get set }
-    var logger: Logger? { get set }
-    var channelID : UUID { get }
+    var channelID : String { get }
 
     func setChannelSpecificOption0<Option: ChannelOption>(option: Option, value: Option.Value) throws
 
@@ -616,9 +614,6 @@ extension StateManagedNWConnectionChannel {
             self.maximumReceiveLength = value as! NIOTSChannelOptions.Types.NIOTSMaximumReceiveLengthOption.Value
         case is ChannelOptions.Types.SendableStorage:
             self.storage = value as! ChannelOptions.Types.SendableStorage.Value
-        case is ChannelOptions.Types.LoggerOption:
-            self.logger = value as? ChannelOptions.Types.LoggerOption.Value
-            
         default:
             try self.setChannelSpecificOption0(option: option, value: value)
         }
@@ -681,8 +676,6 @@ extension StateManagedNWConnectionChannel {
             return self.maximumReceiveLength as! Option.Value
         case is ChannelOptions.Types.SendableStorage:
             return self.storage as! Option.Value
-        case is ChannelOptions.Types.LoggerOption:
-            return self.logger as! Option.Value
         case is ChannelOptions.Types.ChannelID:
             return self.channelID as! Option.Value
             
