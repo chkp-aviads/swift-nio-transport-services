@@ -174,7 +174,12 @@ public final class NIOTSDatagramConnectionBootstrap {
     /// Connect to a given host and port using the given resolver
     public func connect(resolver: Resolver & Sendable, host: String, port: Int)-> EventLoopFuture<Channel> {
         let eventLoop = self.group.next() as! NIOTSEventLoop
-        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout) { [qos, udpOptions, tlsOptions, nwParametersConfigurator, channelInitializer, channelOptions, connectTimeout] event, family in
+        // Datagrams prefer IPv4 here for the same reason NIOPosix does: nothing about establishing
+        // a UDP "connection" proves the path carries traffic, so whichever family is tried first
+        // wins unverified. Being wrong about IPv4 fails loudly and falls through to IPv6; being
+        // wrong about IPv6 drops every datagram in silence. Matching NIOPosix also keeps a caller
+        // that switches backends from silently changing which address it dials.
+        return HappyEyeballsConnector(resolver: resolver, loop: eventLoop, host: host, port: port, connectTimeout: self.connectTimeout, addressPreference: .ipv4) { [qos, udpOptions, tlsOptions, nwParametersConfigurator, channelInitializer, channelOptions, connectTimeout] event, family in
             return NIOTSDatagramBootstrap.initializeAndRegisterNewChannel(eventLoop: eventLoop, qos: qos, udpOptions: udpOptions, tlsOptions: tlsOptions, nwParametersConfigurator: nwParametersConfigurator, channelInitializer: channelInitializer, channelOptions: channelOptions, connectTimeout: connectTimeout) { channel, promise in
                 promise.succeed()
             }

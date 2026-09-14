@@ -39,20 +39,70 @@ struct NonBlockingResolver : Resolver, Sendable {
     }
 }
 
+/// Thrown when datagrams a test expected never turned up.
+struct DatagramsNeverArrived: Error, CustomStringConvertible {
+    let expected: Int
+    let after: TimeAmount
+
+    var description: String { "waited \(after) for \(expected) datagram(s) that never arrived" }
+}
+
+/// Thrown when a future a test was waiting on never completed.
+struct TimedOutWaitingForFuture: Error, CustomStringConvertible {
+    let after: TimeAmount
+
+    var description: String { "future did not complete within \(after)" }
+}
+
+extension EventLoopFuture where Value: Sendable {
+    /// `wait()` with a deadline.
+    ///
+    /// Every wait in a UDP test is really a wait on a datagram, and a datagram sent where nobody
+    /// listens produces no refusal and, off loopback, no ICMP either -- so a test that addressed
+    /// the wrong host blocks forever rather than failing. That takes the whole suite with it, and
+    /// hides which test was wrong. A deadline turns it back into an ordinary failure.
+    func wait(within timeout: TimeAmount) throws -> Value {
+        let promise = self.eventLoop.makePromise(of: Value.self)
+        let deadline = self.eventLoop.scheduleTask(in: timeout) {
+            // A no-op if the future already completed -- resolving a promise twice is ignored.
+            promise.fail(TimedOutWaitingForFuture(after: timeout))
+        }
+        defer { deadline.cancel() }
+
+        self.cascade(to: promise)
+        return try promise.futureResult.wait()
+    }
+}
+
 extension Channel {
-    func wait<T: Sendable>(for type: T.Type, count: Int) throws -> [T] {
-        try self.pipeline.context(name: "ByteReadRecorder").flatMap { context in
+    /// Waits for `count` inbound values, failing rather than blocking forever if they never come.
+    ///
+    /// UDP gives nothing back when a datagram goes somewhere no one is listening: there is no
+    /// handshake to refuse it and, off loopback, often no ICMP either. Waiting without a deadline
+    /// therefore turns "this one test addressed the wrong host" into a suite that hangs forever,
+    /// which is far harder to diagnose than the assertion failure it should have been.
+    func wait<T: Sendable>(for type: T.Type, count: Int, timeout: TimeAmount = .seconds(5)) throws -> [T] {
+        let promise = self.eventLoop.makePromise(of: [T].self)
+        let deadline = self.eventLoop.scheduleTask(in: timeout) {
+            // A no-op if the datagrams already arrived -- resolving a promise twice is ignored.
+            promise.fail(DatagramsNeverArrived(expected: count, after: timeout))
+        }
+        defer { deadline.cancel() }
+
+        self.pipeline.context(name: "ByteReadRecorder").flatMap { context -> EventLoopFuture<[T]> in
             if let future = (context.handler as? ReadRecorder<T>)?.notifyForDatagrams(count) {
                 return future
             }
 
             XCTFail("Could not wait for reads")
             return self.eventLoop.makeSucceededFuture([] as [T])
-        }.wait()
+        }.cascade(to: promise)
+
+        return try promise.futureResult.wait()
     }
 
-    func waitForDatagrams(count: Int) throws -> [ByteBuffer] {
-        try wait(for: ByteBuffer.self, count: count)
+    func waitForDatagrams(count: Int, timeout: TimeAmount = .seconds(5)) throws -> [ByteBuffer] {
+        try wait(for: ByteBuffer.self, count: count, timeout: timeout)
     }
 
     func readCompleteCount() throws -> Int {
@@ -250,7 +300,7 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
         secondBuffer.writeStaticString("goodbye, world!")
         XCTAssertNoThrow(try client.writeAndFlush(secondBuffer).wait())
 
-        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let serverHandle = try serverHandlePromise.futureResult.wait(within: .seconds(5))
 
         let reads = try serverHandle.waitForDatagrams(count: 2)
 
@@ -283,7 +333,7 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
 
         // Obtain the server-side child channel created upon first datagram arrival
         // and assert the server observed the datagram as well.
-        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let serverHandle = try serverHandlePromise.futureResult.wait(within: .seconds(5))
         do {
             let serverReads = try serverHandle.waitForDatagrams(count: 1)
             XCTAssertEqual(serverReads.count, 1)
@@ -488,7 +538,7 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
         buffer.writeStaticString("test message")
         XCTAssertNoThrow(try client.writeAndFlush(buffer).wait())
 
-        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let serverHandle = try serverHandlePromise.futureResult.wait(within: .seconds(5))
         let received = try serverHandle.waitForDatagrams(count: 1)
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received[0], buffer)
@@ -499,10 +549,16 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
     /// `getaddrinfo` stays off the event loop. `testConnectResolving` only covers the literal.
     func testConnectResolvingHostname() throws {
         let serverHandlePromise = group.next().makePromise(of: Channel.self)
-        // Bind by name, not by literal: resolving "localhost" yields ::1 ahead of 127.0.0.1, and a
-        // UDP connect completes against either without a handshake to reveal the mismatch. A
-        // v4-only server would simply never see the datagram, and this test would hang.
-        let server = try buildServerChannel(group: group, host: "localhost", onConnect: serverHandlePromise.succeed)
+        // The server binds the family the client will pick. `connectResolving` sends a hostname
+        // through Happy Eyeballs, and a datagram connector prefers A over AAAA, so this is
+        // 127.0.0.1. Binding by name instead lands the listener on ::1 -- a UDP connect completes
+        // against either without a handshake to reveal the mismatch, so the datagram would simply
+        // never arrive and this test would hang rather than fail.
+        //
+        // Only loopback makes this ambiguous: a real name that resolves to both families belongs
+        // to a host reachable on both. Flipping the connector's preference must therefore flip
+        // this bind too, and the resulting hang is the reminder.
+        let server = try buildServerChannel(group: group, host: "127.0.0.1", onConnect: serverHandlePromise.succeed)
         defer { XCTAssertNoThrow(try server.close().wait()) }
 
         let client = try NIOTSDatagramConnectionBootstrap(group: group)
@@ -514,7 +570,7 @@ final class NIOTSDatagramBootstrapTests: XCTestCase {
         buffer.writeStaticString("test message")
         XCTAssertNoThrow(try client.writeAndFlush(buffer).wait())
 
-        let serverHandle = try serverHandlePromise.futureResult.wait()
+        let serverHandle = try serverHandlePromise.futureResult.wait(within: .seconds(5))
         let received = try serverHandle.waitForDatagrams(count: 1)
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received[0], buffer)
