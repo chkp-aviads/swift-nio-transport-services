@@ -96,6 +96,9 @@ class NIOTSChannelOptionsTests: XCTestCase {
         let collectGroup = DispatchGroup()
 
         let listener = try NIOTSListenerBootstrap(group: self.group)
+            .childChannelInitializer { channel in
+                channel.pipeline.addHandler(EchoHandler())
+            }
             .bind(host: "localhost", port: 0).wait()
         defer {
             XCTAssertNoThrow(try listener.close().wait())
@@ -109,6 +112,13 @@ class NIOTSChannelOptionsTests: XCTestCase {
         }
 
         let pendingReport = try connection.getOption(NIOTSChannelOptions.dataTransferReport).wait()
+
+        // Network.framework only includes paths that actually carried traffic while the report was
+        // pending, so an idle connection collects zero path reports. Drive a round trip first.
+        let payload = connection.allocator.bufferFor(string: "hello")
+        let echoed = connection.expectRead(payload)
+        XCTAssertNoThrow(try connection.writeAndFlush(payload).wait())
+        XCTAssertNoThrow(try echoed.wait())
 
         collectGroup.enter()
         pendingReport.collect(queue: syncQueue) { report in
